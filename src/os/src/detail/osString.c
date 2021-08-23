@@ -111,8 +111,8 @@ bool taosValidateEncodec(const char *encodec) {
 #endif
 
 typedef struct CharsetPair {
-  char *oldCharset;
-  char *newCharset;
+  const char *oldCharset;
+  const char *newCharset;
 } CharsetPair;
 
 char *taosCharsetReplace(char *charsetstr) {

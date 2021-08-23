@@ -161,7 +161,7 @@ void mnodeGetStatOfAllAcct(SAcctInfo* pAcctInfo) {
   }
 }
 
-void *mnodeGetAcct(char *name) {
+void *mnodeGetAcct(const char *name) {
   return sdbGetRow(tsAcctSdb, name);
 }
 

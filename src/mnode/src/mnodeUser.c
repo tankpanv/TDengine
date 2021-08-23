@@ -191,8 +191,8 @@ void mnodeCleanupUsers() {
   tsUserSdb = NULL;
 }
 
-SUserObj *mnodeGetUser(char *name) {
-  return (SUserObj *)sdbGetRow(tsUserSdb, name);
+SUserObj *mnodeGetUser(const char *name) {
+  return (SUserObj *)sdbGetRow(tsUserSdb, (void *)name);
 }
 
 void *mnodeGetNextUser(void *pIter, SUserObj **pUser) { 
@@ -229,7 +229,7 @@ static int32_t mnodeUpdateUser(SUserObj *pUser, void *pMsg) {
   return code;
 }
 
-int32_t mnodeCreateUser(SAcctObj *pAcct, char *name, char *pass, void *pMsg) {
+int32_t mnodeCreateUser(SAcctObj *pAcct, const char *name, const char *pass, void *pMsg) {
   int32_t code = acctCheck(pAcct, ACCT_GRANT_USER);
   if (code != TSDB_CODE_SUCCESS) {
     return code;
@@ -413,7 +413,7 @@ char *mnodeGetUserFromMsg(void *pMsg) {
   if (pMnodeMsg != NULL && pMnodeMsg->pUser != NULL) {
     return pMnodeMsg->pUser->user;
   } else {
-    return "system";
+    return (char *)"system";
   }
 }
 

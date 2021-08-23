@@ -24,7 +24,7 @@ extern "C" {
 
 #ifdef TSDB_SQL_C
 #define TSDB_DEFINE_SQL_TYPE( name, msg ) msg, 
-char *sqlCmd[] = {
+const char *sqlCmd[] = {
   "null",
 #else
 #define TSDB_DEFINE_SQL_TYPE( name, msg ) name,
@@ -110,7 +110,7 @@ enum TSQL_TYPE {
   TSQL_CREATE_STREAM = 0x4,
 };
 
-extern char *sqlCmd[];
+extern const char *sqlCmd[];
 
 #ifdef __cplusplus
 }

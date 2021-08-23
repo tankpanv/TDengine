@@ -19,7 +19,7 @@
 
 static SStartupStep tsStartupStep;
 
-void dnodeReportStep(char *name, char *desc, int8_t finished) {
+void dnodeReportStep(const char *name, const char *desc, int8_t finished) {
   tstrncpy(tsStartupStep.name, name, sizeof(tsStartupStep.name));
   tstrncpy(tsStartupStep.desc, desc, sizeof(tsStartupStep.desc));
   tsStartupStep.finished = finished;

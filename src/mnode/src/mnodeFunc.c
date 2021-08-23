@@ -355,9 +355,9 @@ static int32_t mnodeGetFuncMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pCo
 }
 
 static void* mnodeGenTypeStr(char *buf, int32_t buflen, uint8_t type, int16_t len) {
-  char *msg = "unknown";
+  const char *msg = "unknown";
   if (type >= sizeof(tDataTypes)/sizeof(tDataTypes[0])) {
-    return msg;
+    return (void*)msg;
   }
   
   if (type == TSDB_DATA_TYPE_NCHAR || type == TSDB_DATA_TYPE_BINARY) {

@@ -32,7 +32,7 @@ extern "C" {
 
 #ifdef TAOS_MESSAGE_C
 #define TAOS_DEFINE_MESSAGE_TYPE( name, msg ) msg, msg "-rsp",
-char *taosMsg[] = {
+const char *taosMsg[] = {
   "null",
 #else
 #define TAOS_DEFINE_MESSAGE_TYPE( name, msg ) name, name##_RSP,
@@ -196,7 +196,7 @@ enum _mgmt_table {
 #define TSDB_COL_REQ_NULL(f)        (((f)&TSDB_COL_NULL) != 0)
 
 
-extern char *taosMsg[];
+extern const char *taosMsg[];
 
 #pragma pack(push, 1)
 

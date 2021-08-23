@@ -69,14 +69,14 @@ void    dnodeDelayReprocessMWriteMsg(void *pMsg);
 void    dnodeSendStatusMsgToMnode();
 
 typedef struct {
-  char *name;
+  const char *name;
   int32_t (*initFp)();
   void (*cleanupFp)();
 } SStep;
 
 int32_t dnodeStepInit(SStep *pSteps, int32_t stepSize);
 void    dnodeStepCleanup(SStep *pSteps, int32_t stepSize);
-void    dnodeReportStep(char *name, char *desc, int8_t finished);
+void    dnodeReportStep(const char *name, const char *desc, int8_t finished);
 
 #ifdef __cplusplus
 }

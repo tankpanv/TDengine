@@ -65,7 +65,7 @@ static int32_t mnodeGetDnodeMeta(STableMetaMsg *pMeta, SShowObj *pShow, void *pC
 static int32_t mnodeRetrieveDnodes(SShowObj *pShow, char *data, int32_t rows, void *pConn);
 static void    mnodeUpdateDnodeEps();
 
-static char* offlineReason[] = {
+static const char* offlineReason[] = {
   "",
   "status msg timeout",
   "status not received",
@@ -899,12 +899,12 @@ static int32_t mnodeRetrieveDnodes(SShowObj *pShow, char *data, int32_t rows, vo
     cols++;
     
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;  
-    char* status = dnodeStatus[pDnode->status];
+    const char* status = dnodeStatus[pDnode->status];
     STR_TO_VARSTR(pWrite, status);
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;  
-    char* role = dnodeRoles[pDnode->alternativeRole];
+    const char* role = dnodeRoles[pDnode->alternativeRole];
     STR_TO_VARSTR(pWrite, role);
     cols++;
 
@@ -940,7 +940,7 @@ static int32_t mnodeRetrieveDnodes(SShowObj *pShow, char *data, int32_t rows, vo
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    char *status = dnodeStatus[tsArbOnline > 0 ? TAOS_DN_STATUS_READY : TAOS_DN_STATUS_OFFLINE];
+    const char *status = dnodeStatus[tsArbOnline > 0 ? TAOS_DN_STATUS_READY : TAOS_DN_STATUS_OFFLINE];
     STR_TO_VARSTR(pWrite, status);
     cols++;
 
@@ -1026,7 +1026,7 @@ int32_t mnodeRetrieveModules(SShowObj *pShow, char *data, int32_t rows, void *pC
   int32_t numOfRows = 0;
 
   char* pWrite;
-  char* moduleName[5] = { "MNODE", "HTTP", "MONITOR", "MQTT", "UNKNOWN" };
+  const char* moduleName[5] = { "MNODE", "HTTP", "MONITOR", "MQTT", "UNKNOWN" };
   int32_t cols;
 
   while (numOfRows < rows) {
@@ -1052,7 +1052,7 @@ int32_t mnodeRetrieveModules(SShowObj *pShow, char *data, int32_t rows, void *pC
       pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
       bool enable = mnodeCheckModuleInDnode(pDnode, moduleType);
 
-      char* v = enable? "enable":"disable";
+      const char* v = enable? "enable":"disable";
       STR_TO_VARSTR(pWrite, v);
       cols++;
 
@@ -1274,7 +1274,7 @@ static int32_t mnodeRetrieveVnodes(SShowObj *pShow, char *data, int32_t rows, vo
   return numOfRows;
 }
 
-char* dnodeStatus[] = {
+const char* dnodeStatus[] = {
   "offline",
   "dropping",
   "balancing",
@@ -1282,7 +1282,7 @@ char* dnodeStatus[] = {
   "undefined"
 };
 
-char* dnodeRoles[] = {
+const char* dnodeRoles[] = {
   "any",
   "mnode",
   "vnode",

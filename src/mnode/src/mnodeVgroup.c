@@ -44,7 +44,7 @@ typedef enum {
   TAOS_VG_STATUS_UPDATING,
 } EVgroupStatus;
 
-char* vgroupStatus[] = {
+const char* vgroupStatus[] = {
   "ready",
   "dropping",
   "creating",
@@ -800,7 +800,7 @@ static int32_t mnodeRetrieveVgroups(SShowObj *pShow, char *data, int32_t rows, v
     cols++;
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;  
-    char* status = vgroupStatus[pVgroup->status];
+    const char* status = vgroupStatus[pVgroup->status];
     STR_TO_VARSTR(pWrite, status);
     cols++;
 

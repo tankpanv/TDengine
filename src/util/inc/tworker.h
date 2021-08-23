@@ -34,7 +34,7 @@ typedef struct SWorkerPool {
   int32_t  min;  // min number of workers
   int32_t  num;  // current number of workers
   void *   qset;
-  char *   name;
+  const char *   name;
   SWorker *worker;
   FWorkerThread   workerFp;
   pthread_mutex_t mutex;

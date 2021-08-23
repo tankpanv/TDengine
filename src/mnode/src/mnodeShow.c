@@ -89,7 +89,7 @@ void mnodeAddShowFreeIterHandle(uint8_t msgType, SShowFreeIterFp fp) {
   tsMnodeShowFreeIterFp[msgType] = fp;
 }
 
-static char *mnodeGetShowType(int32_t showType) {
+static const char *mnodeGetShowType(int32_t showType) {
   switch (showType) {
     case TSDB_MGMT_TABLE_ACCT:    return "show accounts";
     case TSDB_MGMT_TABLE_USER:    return "show users";

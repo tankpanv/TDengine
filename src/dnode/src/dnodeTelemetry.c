@@ -265,7 +265,7 @@ static void* telemetryThread(void* param) {
   return NULL;
 }
 
-static void dnodeGetEmail(char* filepath) {
+static void dnodeGetEmail(const char* filepath) {
   int32_t fd = open(filepath, O_RDONLY);
   if (fd < 0) {
     return;

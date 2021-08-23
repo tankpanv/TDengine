@@ -298,7 +298,7 @@ loop_end:
 /* don't ask me, but the original cJSON_SetNumberValue returns an integer or double */
 CJSON_PUBLIC(double) cJSON_SetNumberHelper(cJSON *object, double number)
 {
-    if (number >= LLONG_MAX)
+    if (number >= 0xfffffffffffffc00L)
     {
         object->valueint = LLONG_MAX;
     }

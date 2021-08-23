@@ -58,18 +58,18 @@ typedef struct SRpcMsg {
 
 typedef struct SRpcInit {
   uint16_t localPort; // local port
-  char  *label;        // for debug purpose
+  const char  *label;        // for debug purpose
   int    numOfThreads; // number of threads to handle connections
   int    sessions;     // number of sessions allowed
   int8_t connType;     // TAOS_CONN_UDP, TAOS_CONN_TCPC, TAOS_CONN_TCPS
   int    idleTime;     // milliseconds, 0 means idle timer is disabled
 
   // the following is for client app ecurity only
-  char *user;         // user name
+  const char *user;         // user name
   char  spi;          // security parameter index
   char  encrypt;      // encrypt algorithm
   char *secret;       // key for authentication
-  char *ckey;         // ciphering key
+  const char *ckey;         // ciphering key
 
   // call back to process incoming msg, code shall be ignored by server app
   void (*cfp)(SRpcMsg *, SRpcEpSet *);  

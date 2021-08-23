@@ -48,9 +48,9 @@ int32_t main(int32_t argc, char *argv[]) {
       tsCompactMnodeWal = 1;
     } else if (strcmp(argv[i], "-V") == 0) {
 #ifdef _ACCT
-      char *versionStr = "enterprise";
+      const char *versionStr = "enterprise";
 #else
-      char *versionStr = "community";
+      const char *versionStr = "community";
 #endif
       printf("%s version: %s compatible_version: %s\n", versionStr, version, compatible_version);
       printf("gitinfo: %s\n", gitinfo);

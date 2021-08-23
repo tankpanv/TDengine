@@ -50,7 +50,7 @@ typedef enum {
   SDB_STATUS_CLOSING = 2
 } ESdbStatus;
 
-char *actStr[] = {
+const char *actStr[] = {
   "insert",
   "delete",
   "update",
@@ -162,7 +162,7 @@ static char *sdbGetKeyStr(SSdbTable *pTable, void *key) {
       sprintf(str, "%d", *(int32_t *)key);
       return str;
     default:
-      return "invalid";
+      return (char *)"invalid";
   }
 }
 
@@ -507,12 +507,12 @@ void sdbDecRef(void *tparam, void *pRow) {
   }
 }
 
-static void *sdbGetRowMeta(SSdbTable *pTable, void *key) {
+static void *sdbGetRowMeta(SSdbTable *pTable, const void *key) {
   if (pTable == NULL) return NULL;
 
   int32_t keySize = sizeof(int32_t);
   if (pTable->keyType == SDB_KEY_STRING || pTable->keyType == SDB_KEY_VAR_STRING) {
-    keySize = (int32_t)strlen((char *)key);
+    keySize = (int32_t)strlen((const char *)key);
   }
 
   void **ppRow = (void **)taosHashGet(pTable->iHandle, key, keySize);
@@ -525,7 +525,7 @@ static void *sdbGetRowMetaFromObj(SSdbTable *pTable, void *key) {
   return sdbGetRowMeta(pTable, sdbGetObjKey(pTable, key));
 }
 
-void *sdbGetRow(void *tparam, void *key) {
+void *sdbGetRow(void *tparam, const void *key) {
   SSdbTable *pTable = tparam;
 
   pthread_mutex_lock(&pTable->mutex);

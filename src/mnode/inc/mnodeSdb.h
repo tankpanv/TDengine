@@ -65,7 +65,7 @@ typedef struct SSdbRow {
 } SSdbRow;
 
 typedef struct {
-  char *    name;
+  const char *    name;
   int32_t   hashSessions;
   int32_t   maxRowSize;
   int32_t   refCountPos;
@@ -98,7 +98,7 @@ int32_t sdbDeleteRow(SSdbRow *pRow);
 int32_t sdbUpdateRow(SSdbRow *pRow);
 int32_t sdbInsertRowToQueue(SSdbRow *pRow);
 
-void *   sdbGetRow(void *pTable, void *key);
+void *   sdbGetRow(void *pTable, const void *key);
 void *   sdbFetchRow(void *pTable, void *pIter, void **ppRow);
 void     sdbFreeIter(void *pTable, void *pIter);
 void     sdbIncRef(void *pTable, void *pRow);

@@ -842,7 +842,7 @@ static int32_t mnodeRetrieveDbs(SShowObj *pShow, char *data, int32_t rows, void 
 #endif
 
     pWrite = data + pShow->offset[cols] * rows + pShow->bytes[cols] * numOfRows;
-    char *prec = NULL;
+    const char *prec = NULL;
     switch (pDb->cfg.precision) {
       case TSDB_TIME_PRECISION_MILLI: prec = TSDB_TIME_PRECISION_MILLI_STR; break;
       case TSDB_TIME_PRECISION_MICRO: prec = TSDB_TIME_PRECISION_MICRO_STR; break;

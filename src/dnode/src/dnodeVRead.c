@@ -119,7 +119,7 @@ static void *dnodeProcessReadQueue(void *wparam) {
   int32_t      qtype;
   void *       pVnode;
 
-  char* threadname  = strcmp(pPool->name, "vquery") == 0? "dnodeQueryQ":"dnodeFetchQ";
+  const char* threadname  = strcmp(pPool->name, "vquery") == 0? "dnodeQueryQ":"dnodeFetchQ";
 
   char name[16] = {0};
   snprintf(name, tListLen(name), "%s", threadname);

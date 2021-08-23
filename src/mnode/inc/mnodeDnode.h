@@ -58,8 +58,8 @@ typedef enum EDnodeOfflineReason {
   TAOS_DN_OFF_OTHERS
 } EDnodeOfflineReason;
 
-extern char* dnodeStatus[];
-extern char* dnodeRoles[];
+extern const char* dnodeStatus[];
+extern const char* dnodeRoles[];
 
 int32_t mnodeInitDnodes();
 void    mnodeCleanupDnodes();

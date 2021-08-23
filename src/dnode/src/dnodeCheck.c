@@ -19,7 +19,7 @@
 
 typedef struct {
   bool      enable;
-  char *    name;
+  const char *    name;
   int32_t (*initFp)();
   int32_t (*startFp)();
   void    (*cleanUpFp)();

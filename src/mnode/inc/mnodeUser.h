@@ -23,14 +23,14 @@ extern "C" {
 
 int32_t   mnodeInitUsers();
 void      mnodeCleanupUsers();
-SUserObj *mnodeGetUser(char *name);
+SUserObj *mnodeGetUser(const char *name);
 void *    mnodeGetNextUser(void *pIter, SUserObj **pUser);
 void      mnodeCancelGetNextUser(void *pIter);
 void      mnodeIncUserRef(SUserObj *pUser);
 void      mnodeDecUserRef(SUserObj *pUser);
 SUserObj *mnodeGetUserFromConn(void *pConn);
 char *    mnodeGetUserFromMsg(void *pMnodeMsg);
-int32_t   mnodeCreateUser(SAcctObj *pAcct, char *name, char *pass, void *pMsg);
+int32_t   mnodeCreateUser(SAcctObj *pAcct, const char *name, const char *pass, void *pMsg);
 void      mnodeDropAllUsers(SAcctObj *pAcct);
 
 int32_t   mnodeCompactUsers();
