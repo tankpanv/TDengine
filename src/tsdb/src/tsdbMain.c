@@ -579,7 +579,7 @@ static STsdbRepo *tsdbNewRepo(STsdbCfg *pCfg, STsdbAppH *pAppH) {
     return NULL;
   }
 
-  pRepo->pPool = tsdbNewBufPool(pCfg);
+  pRepo->pPool = tsdbNewBufPool();
   if (pRepo->pPool == NULL) {
     tsdbError("vgId:%d failed to create buffer pool since %s", REPO_ID(pRepo), tstrerror(terrno));
     tsdbFreeRepo(pRepo);

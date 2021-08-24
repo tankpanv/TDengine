@@ -6503,7 +6503,7 @@ int32_t validateFunctionsInIntervalOrGroupbyQuery(SSqlCmd* pCmd, SQueryInfo* pQu
 }
 
 typedef struct SDNodeDynConfOption {
-  char*   name;  // command name
+  const char*   name;  // command name
   int32_t len;   // name string length
 } SDNodeDynConfOption;
 
