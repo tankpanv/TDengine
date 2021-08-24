@@ -94,3 +94,6 @@ auto-save-list
 tramp
 .\#*
 TAGS
+/src/**/*.rs
+/tests/**/*.rs
+/deps/**/*.rs
