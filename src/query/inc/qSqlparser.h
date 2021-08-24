@@ -321,6 +321,9 @@ void setShowOptions(SSqlInfo *pInfo, int32_t type, SStrToken* prefix, SStrToken*
 
 void setCreateDbInfo(SSqlInfo *pInfo, int32_t type, SStrToken *pToken, SCreateDbInfo *pDB, SStrToken *pIgExists);
 
+void setCreateFuncInfo(SSqlInfo *pInfo, int32_t type, SStrToken *pName, SStrToken *pPath, TAOS_FIELD *output, SStrToken* bufSize, int32_t funcType);
+void setDropFuncInfo(SSqlInfo *pInfo, int32_t type, SStrToken* pToken);
+
 void setCreateAcctSql(SSqlInfo *pInfo, int32_t type, SStrToken *pName, SStrToken *pPwd, SCreateAcctInfo *pAcctInfo);
 void setCreateUserSql(SSqlInfo *pInfo, SStrToken *pName, SStrToken *pPasswd);
 void setKillSql(SSqlInfo *pInfo, int32_t type, SStrToken *ip);
@@ -330,6 +333,8 @@ void setCompactVnodeSql(SSqlInfo *pInfo, int32_t type, SArray *pParam);
 
 void setDefaultCreateDbOption(SCreateDbInfo *pDBInfo);
 void setDefaultCreateTopicOption(SCreateDbInfo *pDBInfo);
+
+void* destroyCreateTableSql(SCreateTableSql* pCreate);
 
 // prefix show db.tables;
 void tSetDbName(SStrToken *pCpxName, SStrToken *pDb);
