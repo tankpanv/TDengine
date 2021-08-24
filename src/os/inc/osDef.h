@@ -157,7 +157,7 @@ extern "C" {
 #endif
 #define tListLen(x) (sizeof(x) / sizeof((x)[0]))
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(C2RUST)
 #define FORCE_INLINE inline __attribute__((always_inline))
 #else
 #define FORCE_INLINE

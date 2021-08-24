@@ -68,3 +68,6 @@ ELSE ()
     MESSAGE(STATUS "Build Debug Version as default")
   ENDIF()
 ENDIF ()
+
+SET(C2RUST "1")
+MESSAGE(STATUS "build c2rust version")
