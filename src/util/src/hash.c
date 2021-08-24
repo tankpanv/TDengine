@@ -776,12 +776,12 @@ size_t taosHashGetMemSize(const SHashObj *pHashObj) {
   return (pHashObj->capacity * (sizeof(SHashEntry) + POINTER_BYTES)) + sizeof(SHashNode) * taosHashGetSize(pHashObj) + sizeof(SHashObj);
 }
 
-FORCE_INLINE void *taosHashGetDataKey(SHashObj *pHashObj, void *data) {
+void *taosHashGetDataKey(SHashObj *pHashObj, void *data) {
   SHashNode * node = GET_HASH_PNODE(data);
   return GET_HASH_NODE_KEY(node);
 }
 
-FORCE_INLINE uint32_t taosHashGetDataKeyLen(SHashObj *pHashObj, void *data) {
+uint32_t taosHashGetDataKeyLen(SHashObj *pHashObj, void *data) {
   SHashNode * node = GET_HASH_PNODE(data);
   return node->keyLen;
 }

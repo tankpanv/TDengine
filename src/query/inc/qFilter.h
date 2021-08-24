@@ -85,7 +85,7 @@ enum {
 
 typedef struct OptrStr {
   uint16_t optr;
-  char    *str;
+  const char    *str;
 } OptrStr;
 
 typedef struct SFilterRange {

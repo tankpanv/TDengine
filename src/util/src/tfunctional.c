@@ -36,7 +36,7 @@ tVoidSavedFunc* voidSavedFuncInit(VoidVaFunc func, int numOfArgs) {
   return pSavedFunc;
 }
 
-FORCE_INLINE void* genericInvoke(tGenericSavedFunc* const pSavedFunc) {
+void* genericInvoke(tGenericSavedFunc* const pSavedFunc) {
   return pSavedFunc->func(pSavedFunc->args);
 }
 

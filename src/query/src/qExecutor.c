@@ -8359,7 +8359,7 @@ void setResultBufSize(SQueryAttr* pQueryAttr, SRspResultInfo* pResultInfo) {
   pResultInfo->total = 0;
 }
 
-FORCE_INLINE bool checkQIdEqual(void *qHandle, uint64_t qId) {
+bool checkQIdEqual(void *qHandle, uint64_t qId) {
   return ((SQInfo *)qHandle)->qId == qId;
 }
 

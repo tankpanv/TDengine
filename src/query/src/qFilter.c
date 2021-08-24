@@ -19,7 +19,7 @@
 #include "hash.h"
 #include "tscUtil.h"
 
-OptrStr gOptrStr[] = {
+const OptrStr gOptrStr[] = {
   {TSDB_RELATION_INVALID,                  "invalid"},
   {TSDB_RELATION_LESS,                     "<"},
   {TSDB_RELATION_GREATER,                  ">"},
@@ -3033,7 +3033,7 @@ bool filterExecuteImpl(void *pinfo, int32_t numOfRows, int8_t** p, SDataStatis *
 }
 
 
-FORCE_INLINE bool filterExecute(SFilterInfo *info, int32_t numOfRows, int8_t** p, SDataStatis *statis, int16_t numOfCols) {
+bool filterExecute(SFilterInfo *info, int32_t numOfRows, int8_t** p, SDataStatis *statis, int16_t numOfCols) {
   return (*info->func)(info, numOfRows, p, statis, numOfCols);
 }
 

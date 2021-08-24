@@ -404,7 +404,7 @@ char tTokenTypeSwitcher[13] = {
 float floatMin = -FLT_MAX, floatMax = FLT_MAX;
 double doubleMin = -DBL_MAX, doubleMax = DBL_MAX;
 
-FORCE_INLINE void* getDataMin(int32_t type) {
+void* getDataMin(int32_t type) {
   switch (type) {
     case TSDB_DATA_TYPE_FLOAT:
       return &floatMin;
@@ -415,7 +415,7 @@ FORCE_INLINE void* getDataMin(int32_t type) {
   }
 }
 
-FORCE_INLINE void* getDataMax(int32_t type) {
+void* getDataMax(int32_t type) {
   switch (type) {
     case TSDB_DATA_TYPE_FLOAT:
       return &floatMax;
