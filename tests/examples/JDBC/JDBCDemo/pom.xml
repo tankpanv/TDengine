@@ -66,7 +66,6 @@
                             <goal>single</goal>
                         </goals>
                     </execution>
-
                     <execution>
                         <id>SubscribeDemo</id>
                         <configuration>
@@ -74,6 +73,24 @@
                             <archive>
                                 <manifest>
                                     <mainClass>com.taosdata.example.SubscribeDemo</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptorRefs>
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                            </descriptorRefs>
+                        </configuration>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>ParameterBindingDemo</id>
+                        <configuration>
+                            <finalName>ParameterBindingDemo</finalName>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.taosdata.example.ParameterBindingDemo</mainClass>
                                 </manifest>
                             </archive>
                             <descriptorRefs>

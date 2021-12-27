@@ -36,7 +36,7 @@ public class ParameterBindingDemo {
 
         for (int i = 0; i < 1000000; i++) {
             bindInteger(conn);
-            System.out.println();
+            System.out.println(">>>" + i);
             try {
                 TimeUnit.SECONDS.sleep(1);
             } catch (InterruptedException e) {
