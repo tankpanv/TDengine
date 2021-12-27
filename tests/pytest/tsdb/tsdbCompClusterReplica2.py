@@ -24,7 +24,7 @@ from random import choice
  
 class TwoClients:
     def initConnection(self):
-        self.host = "chenhaoran02"
+        self.host = "chenhaoran01"
         self.user = "root"
         self.password = "taosdata"
         self.config = "/etc/taos/"     
@@ -65,11 +65,11 @@ class TwoClients:
 
         # new db ,new super tables , child tables, and insert  data
         tdSql.execute("drop database if exists db2")
-        os.system("%staosdemo -f tsdb/insertDataDb1Replica2.json -y " % binPath)
+        os.system("%staosBenchmark -f tsdb/insertDataDb1Replica2.json -y " % binPath)
         tdSql.execute("drop database if exists db1") 
-        os.system("%staosdemo -f tsdb/insertDataDb2Replica2.json -y " % binPath)
+        os.system("%staosBenchmark -f tsdb/insertDataDb2Replica2.json -y " % binPath)
         tdSql.execute("drop table if exists db2.stb0") 
-        os.system("%staosdemo -f tsdb/insertDataDb2NewstabReplica2.json -y " % binPath)
+        os.system("%staosBenchmark -f tsdb/insertDataDb2NewstabReplica2.json -y " % binPath)
 
         # new general tables and modify general tables;  
         tdSql.execute("use db2")
@@ -116,8 +116,10 @@ class TwoClients:
         sleep(3)
         tdSql.execute(" drop dnode 'chenhaoran02:6030'; ")
         sleep(20)
-        os.system("rm -rf /var/lib/taos/*")
+        # remove data file;
+        os.system("rm -rf /home/chr/data/data0/*")
         print("clear dnode chenhaoran02'data files")
+        sleep(5)
         os.system("nohup /usr/bin/taosd > /dev/null 2>&1 &")
         print("start taosd")
         sleep(10)

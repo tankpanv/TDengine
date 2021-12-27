@@ -540,7 +540,7 @@ static int32_t walRestoreWalFile(SWal *pWal, void *pVnode, FWalWrite writeFp, ch
 
     pWal->version = pHead->version;
 
-    //wInfo("writeFp: %ld", offset);
+    // wInfo("writeFp: %ld", offset);
     if (0 != walSMemRowCheck(pHead)) {
       wError("vgId:%d, restore wal, fileId:%" PRId64 " hver:%" PRIu64 " wver:%" PRIu64 " len:%d offset:%" PRId64,
              pWal->vgId, fileId, pHead->version, pWal->version, pHead->len, offset);
@@ -576,4 +576,14 @@ void walResetVersion(twalh param, uint64_t newVer) {
   wInfo("vgId:%d, version reset from %" PRIu64 " to %" PRIu64, pWal->vgId, pWal->version, newVer);
 
   pWal->version = newVer;
+}
+
+int64_t walGetFSize(twalh handle) {
+  SWal *pWal = handle;
+  if (pWal == NULL) return 0;
+  struct stat _fstat;
+  if (tfStat(pWal->tfd, &_fstat) == 0) {
+    return _fstat.st_size;
+  };
+  return 0;
 }

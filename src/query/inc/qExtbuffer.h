@@ -75,8 +75,15 @@ typedef struct tFilePagesItem {
   tFilePage              item;
 } tFilePagesItem;
 
+typedef struct SSchema1 {
+  uint8_t type;
+  char    name[TSDB_COL_NAME_LEN];
+  int16_t colId;
+  int32_t bytes;
+} SSchema1;
+
 typedef struct SSchemaEx {
-  struct SSchema field;
+  SSchema1       field;
   int32_t        offset;
 } SSchemaEx;
 
@@ -178,7 +185,7 @@ bool tExtMemBufferIsAllDataInMem(tExtMemBuffer *pMemBuffer);
  * @param blockCapacity
  * @return
  */
-SColumnModel *createColumnModel(SSchema *fields, int32_t numOfCols, int32_t blockCapacity);
+SColumnModel *createColumnModel(SSchema1 *fields, int32_t numOfCols, int32_t blockCapacity);
 
 /**
  *
@@ -199,7 +206,7 @@ void destroyColumnModel(SColumnModel *pModel);
 void tColModelCompact(SColumnModel *pModel, tFilePage *inputBuffer, int32_t maxElemsCapacity);
 
 void     tColModelErase(SColumnModel *pModel, tFilePage *inputBuffer, int32_t maxCapacity, int32_t s, int32_t e);
-SSchema *getColumnModelSchema(SColumnModel *pColumnModel, int32_t index);
+SSchema1 *getColumnModelSchema(SColumnModel *pColumnModel, int32_t index);
 
 int16_t getColumnModelOffset(SColumnModel *pColumnModel, int32_t index);
 
@@ -220,12 +227,17 @@ tOrderDescriptor *tOrderDesCreate(const int32_t *orderColIdx, int32_t numOfOrder
 
 void tOrderDescDestroy(tOrderDescriptor *pDesc);
 
+void taoscQSort(void** pCols, SSchema* pSchema, int32_t numOfCols, int32_t numOfRows, int32_t index, __compar_fn_t compareFn);
+
 void tColModelAppend(SColumnModel *dstModel, tFilePage *dstPage, void *srcData, int32_t srcStartRows,
                      int32_t numOfRowsToWrite, int32_t srcCapacity);
 
 typedef int (*__col_compar_fn_t)(tOrderDescriptor *, int32_t numOfRows, int32_t idx1, int32_t idx2, char *data);
 
 void tColDataQSort(tOrderDescriptor *, int32_t numOfRows, int32_t start, int32_t end, char *data, int32_t orderType);
+
+void tColDataMergeSort(tOrderDescriptor *, int32_t numOfRows, int32_t start, int32_t end, char *data, int32_t orderType);
+
 
 void taoscQSort(void** pCols, SSchema* pSchema, int32_t numOfCols, int32_t numOfRows, int32_t index, __compar_fn_t compareFn);
 

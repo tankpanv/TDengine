@@ -15,14 +15,14 @@
     "max_sql_len": 102400000,
     "databases": [{
         "dbinfo": {
-            "name": "json",
+            "name": "json_test",
             "drop": "yes",
             "replica": 1,
             "days": 10,
             "cache": 50,
             "blocks": 8,
             "precision": "ms",
-            "keep": 365,
+            "keep": 36500,
             "minRows": 100,
             "maxRows": 4096,
             "comp":2,

@@ -55,7 +55,7 @@ class TDTestCase:
         tdSql.execute('''drop database if exists test_updata_2 ;''')  
         # update 0 不更新 ; update 1 覆盖更新 ;update 2 合并更新
         tdLog.info("========== test database updata = 2 ==========") 
-        tdSql.execute('''create database test_updata_2 update 2 minrows 10 maxrows 200 ;''')   
+        tdSql.execute('''create database test_updata_2 update 2 minrows 10 maxrows 200 keep 36500;''')   
         tdSql.execute('''use test_updata_2;''')   
         tdSql.execute('''create stable stable_1
                     (ts timestamp , q_int int , q_bigint bigint , q_smallint smallint , q_tinyint tinyint, 
@@ -1181,7 +1181,7 @@ class TDTestCase:
         else:
             tdLog.info("taosd found in %s" % buildPath)
         binPath = buildPath+ "/build/bin/"
-        os.system("%staosdemo -N -d taosdemo -t 100 -n 100 -l 1000 -y" % binPath)
+        os.system("%staosBenchmark -N -d taosdemo -t 100 -n 100 -l 1000 -y" % binPath)
 
         tdLog.info("========== stable ==========") 
         tdSql.execute('''insert into table_2 values( %d , NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);''' %(self.ts - 200))

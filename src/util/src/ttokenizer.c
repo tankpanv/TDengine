@@ -44,6 +44,7 @@ static SKeyword keywordTable[] = {
     {"TIMESTAMP",    TK_TIMESTAMP},
     {"BINARY",       TK_BINARY},
     {"NCHAR",        TK_NCHAR},
+    {"JSON",         TK_JSON},
     {"OR",           TK_OR},
     {"AND",          TK_AND},
     {"NOT",          TK_NOT},
@@ -53,6 +54,7 @@ static SKeyword keywordTable[] = {
     {"NOTNULL",      TK_NOTNULL},
     {"IS",           TK_IS},
     {"LIKE",         TK_LIKE},
+    {"MATCH",        TK_MATCH},
     {"GLOB",         TK_GLOB},
     {"BETWEEN",      TK_BETWEEN},
     {"IN",           TK_IN},
@@ -71,7 +73,6 @@ static SKeyword keywordTable[] = {
     {"STAR",         TK_STAR},
     {"SLASH",        TK_SLASH},
     {"REM ",         TK_REM},
-    {"CONCAT",       TK_CONCAT},
     {"UMINUS",       TK_UMINUS},
     {"UPLUS",        TK_UPLUS},
     {"BITNOT",       TK_BITNOT},
@@ -137,9 +138,11 @@ static SKeyword keywordTable[] = {
     {"COMMA",        TK_COMMA},
     {"NULL",         TK_NULL},
     {"SELECT",       TK_SELECT},
+    {"EVERY",        TK_EVERY},
     {"FROM",         TK_FROM},
     {"VARIABLE",     TK_VARIABLE},
     {"INTERVAL",     TK_INTERVAL},
+    {"EVERY",        TK_EVERY},
     {"SESSION",      TK_SESSION},
     {"STATE_WINDOW", TK_STATE_WINDOW},
     {"FILL",         TK_FILL},
@@ -193,6 +196,7 @@ static SKeyword keywordTable[] = {
     {"INITIALLY",    TK_INITIALLY},
     {"INSTEAD",      TK_INSTEAD},
     {"MATCH",        TK_MATCH},
+    {"NMATCH",       TK_NMATCH},
     {"KEY",          TK_KEY},
     {"OF",           TK_OF},
     {"RAISE",        TK_RAISE},
@@ -226,6 +230,8 @@ static SKeyword keywordTable[] = {
     {"OUTPUTTYPE",   TK_OUTPUTTYPE},
     {"AGGREGATE",    TK_AGGREGATE},
     {"BUFSIZE",      TK_BUFSIZE},
+    {"RANGE",        TK_RANGE},
+    {"CONTAINS",     TK_CONTAINS}
 };
 
 static const char isIdChar[] = {
@@ -306,6 +312,10 @@ uint32_t tGetToken(char* z, uint32_t* tokenId) {
         }
         *tokenId = TK_COMMENT;
         return i;
+      }
+      if (z[1] == '>') {
+        *tokenId = TK_ARROW;
+        return 2;
       }
       *tokenId = TK_MINUS;
       return 1;
@@ -389,9 +399,6 @@ uint32_t tGetToken(char* z, uint32_t* tokenId) {
       if (z[1] != '|') {
         *tokenId = TK_BITOR;
         return 1;
-      } else {
-        *tokenId = TK_CONCAT;
-        return 2;
       }
     }
     case ',': {
@@ -435,6 +442,17 @@ uint32_t tGetToken(char* z, uint32_t* tokenId) {
       if (strEnd) {
         *tokenId = TK_STRING;
         return i;
+      }
+
+      break;
+    }
+    case '`': {
+      for (i = 1; z[i]; i++) {
+        if (z[i] == '`') {
+          i++;
+          *tokenId = TK_ID;
+          return i;
+        }
       }
 
       break;
@@ -577,7 +595,7 @@ SStrToken tscReplaceStrToken(char **str, SStrToken *token, const char* newToken)
   size_t nsize = strlen(newToken);
   int32_t size = (int32_t)strlen(*str) - token->n + (int32_t)nsize + 1;
   int32_t bsize = (int32_t)((uint64_t)token->z - (uint64_t)src);
-  SStrToken ntoken;
+  SStrToken ntoken = {0};
 
   *str = calloc(1, size);
 
@@ -608,15 +626,19 @@ SStrToken tStrGetToken(char* str, int32_t* i, bool isPrevOptr) {
 
     int32_t numOfComma = 0;
     char t = str[*i];
-    while (t == ' ' || t == '\n' || t == '\r' || t == '\t' || t == '\f' || t == ',') {
+    while (isspace(t) || t == ',') {
       if (t == ',' && (++numOfComma > 1)) {  // comma only allowed once
         t0.n = 0;
+        t0.type = TK_ILLEGAL;
         return t0;
       }
-    
+
       t = str[++(*i)];
     }
-
+    if (str[*i] == 0) {
+      t0.n = 0;
+      break;
+    }
     t0.n = tGetToken(&str[*i], &t0.type);
     break;
 

@@ -1,8 +1,8 @@
 # TAOS SQL
 
-TDengine provides a SQL-style language, TAOS SQL, to insert or query data, and support other common tips. To finish this document, you should have some understanding about SQL.
+TDengine provides a SQL-style language, TAOS SQL, to insert or query data. This document introduces TAOS SQL and supports other common tips. To read through this document, readers should have basic understanding about SQL.
 
-TAOS SQL is the main tool for users to write and query data to TDengine. TAOS SQL provides a style and mode similar to standard SQL to facilitate users to get started quickly. Strictly speaking, TAOS SQL is not and does not attempt to provide SQL standard syntax. In addition, since TDengine does not provide deletion function for temporal structured data, the relevant function of data deletion is non-existent in TAO SQL.
+TAOS SQL is the main tool for users to write and query data into/from TDengine. TAOS SQL provides a syntax style similar to standard SQL to facilitate users to get started quickly. Strictly speaking, TAOS SQL is not and does not attempt to provide SQL standard syntax. In addition, since TDengine does not provide deletion functionality for time-series data, the relevant functions of data deletion is unsupported in TAO SQL.
 
 Let’s take a look at the conventions used for syntax descriptions.
 
@@ -37,7 +37,7 @@ With TDengine, the most important thing is timestamp. When creating and insertin
 - Epch Time: a timestamp value can also be a long integer representing milliseconds since 1970-01-01 08:00:00.000.
 - Arithmetic operations can be applied to timestamp. For example: now-2h represents a timestamp which is 2 hours ago from the current server time. Units include u( microsecond), a (milliseconds), s (seconds), m (minutes), h (hours), d (days), w (weeks). In `select * from t1 where ts > now-2w and ts <= now-1w`, which queries data of the whole week before two weeks. To specify the interval of down sampling, you can also use n(calendar month) and y(calendar year) as time units.
 
-Default time precision of TDengine is millisecond, you can change it to microseocnd by setting parameter enableMicrosecond. 
+TDengine's timestamp is set to millisecond accuracy by default. Microsecond/nanosecond accuracy can be set using CREATE DATABASE with PRECISION parameter. (Nanosecond resolution is supported from version 2.1.5.0 onwards.)
 
 In TDengine, the following 10 data types can be used in data model of an ordinary table.
 
@@ -53,13 +53,14 @@ In TDengine, the following 10 data types can be used in data model of an ordinar
 | 8    | TINYINT       | 1         | A nullable integer type with a range of [-127, 127]          |
 | 9    | BOOL          | 1         | Boolean type，{true, false}                                  |
 | 10   | NCHAR         | Custom    | Used to record non-ASCII strings, such as Chinese characters. Each nchar character takes up 4 bytes of storage space. Single quotation marks are used at both ends of the string, and escape characters are required for single quotation marks in the string, that is \’. When nchar is used, the string size must be specified. A column of type nchar (10) indicates that the string of this column stores up to 10 nchar characters, which will take up 40 bytes of space. If the length of the user string exceeds the declared length, an error will be reported. |
-
+| 11   | JSON          |           | Json type，only support for tag                                  |
 
 
 **Tips**:
 
 1. TDengine is case-insensitive to English characters in SQL statements and automatically converts them to lowercase for execution. Therefore, the user's case-sensitive strings and passwords need to be enclosed in single quotation marks.
 2. Avoid using BINARY type to save non-ASCII type strings, which will easily lead to errors such as garbled data. The correct way is to use NCHAR type to save Chinese characters.
+3. The numerical values in SQL statements are treated as floating or integer numbers, depends on if the value contains decimal point or is in scientific notation format. Therefore, caution is needed since overflow might happen for corresponding data types. E.g., 9999999999999999999 is overflowed as the number is greater than the largest integer number. However, 9999999999999999999.0 is treated as a valid floating number. 
 
 ## <a class="anchor" id="management"></a>Database Management
 
@@ -75,7 +76,7 @@ Note:
 2. UPDATE marks the database support updating the same timestamp data;
 3. Maximum length of the database name is 33;
 4. Maximum length of a SQL statement is 65480 characters;
-5.  Database has more storage-related configuration parameters, see System Management.
+5. Database has more storage-related configuration parameters, see [Server-side Configuration](https://www.taosdata.com/en/documentation/administrator#config) .
 
 - **Show current system parameters**
 
@@ -88,7 +89,7 @@ Note:
     ```mysql
     USE db_name;
     ```
-    Use/switch database
+    Use/switch database (Invalid when accessing through RESTful connection)
 
 - **Drop a database**
     ```mysql
@@ -127,7 +128,7 @@ Note:
     ALTER DATABASE db_name CACHELAST 0;
     ```
     CACHELAST parameter controls whether last_row of the data subtable is cached in memory. The default value is 0, and the value range is [0, 1]. Where 0 means not enabled and 1 means enabled. (supported from version 2.0. 11)
-    
+   
     **Tips**: After all the above parameters are modified, show databases can be used to confirm whether the modification is successful.
 
 - **Show all databases in system**
@@ -138,14 +139,17 @@ Note:
 
 ## <a class="anchor" id="table"></a> Table Management
 
-- Create a table
-Note:
+- **Create a table**
 
-1. The first field must be a timestamp, and system will set it as the primary key;
-2. The max length of table name is 192;
-3. The length of each row of the table cannot exceed 16k characters;
-4. Sub-table names can only consist of letters, numbers, and underscores, and cannot begin with numbers
-5. If the data type binary or nchar is used, the maximum number of bytes should be specified, such as binary (20), which means 20 bytes;
+    ```mysql
+    CREATE TABLE [IF NOT EXISTS] tb_name (timestamp_field_name TIMESTAMP, field1_name data_type1 [, field2_name data_type2 ...]);
+    ```
+  Note:
+   1. The first field must be a timestamp, and system will set it as the primary key;
+   2. The max length of table name is 192;
+   3. The length of each row of the table cannot exceed 16k characters;
+   4. Sub-table names can only consist of letters, numbers, and underscores, and cannot begin with numbers
+   5. If the data type binary or nchar is used, the maximum number of bytes should be specified, such as binary (20), which means 20 bytes;
 
 - **Create a table via STable**
 
@@ -171,10 +175,10 @@ Note:
    
    Note:
    1. The method of batch creating tables requires that the data table must use STable as a template.
-   2. On the premise of not exceeding the length limit of SQL statements, it is suggested that the number of tables in a single statement should be controlled between 1000 and 3000, which will obtain an ideal speed of table building.
+   2. On the premise of not exceeding the length limit of SQL statements, it is suggested that the number of tables in a single statement should be controlled between 1000 and 3000, which will obtain an ideal speed of table creating.
 
 - **Drop a table**
-    
+  
     ```mysql
     DROP TABLE [IF EXISTS] tb_name;
     ```
@@ -218,14 +222,14 @@ Note:
 
 ## <a class="anchor" id="super-table"></a> STable Management
 
-Note: In 2.0. 15.0 and later versions, STABLE reserved words are supported. That is, in the instruction description later in this section, the three instructions of CREATE, DROP and ALTER need to write TABLE instead of STABLE in the old version as the reserved word.
+Note: In 2.0.15.0 and later versions, STABLE reserved words are supported. That is, in the instruction description later in this section, the three instructions of CREATE, DROP and ALTER need to write TABLE instead of STABLE in the old version as the reserved word.
 
 - **Create a STable**
 
     ```mysql
     CREATE STABLE [IF NOT EXISTS] stb_name (timestamp_field_name TIMESTAMP, field1_name data_type1 [, field2_name data_type2 ...]) TAGS (tag1_name tag_type1, tag2_name tag_type2 [, tag3_name tag_type3]);
     ```
-    Similiar to a standard table creation SQL, but you need to specify name and type of TAGS field.
+    Similar to a standard table creation SQL, but you need to specify name and type of TAGS field.
     
     Note:
     
@@ -290,7 +294,7 @@ Note: In 2.0. 15.0 and later versions, STABLE reserved words are supported. That
     Modify a tag name of STable. After modifying, all sub-tables under the STable will automatically update the new tag name.
 
 - **Modify a tag value of sub-table**
-    
+  
     ```mysql
     ALTER TABLE tb_name SET TAG tag_name=new_tag_value;
     ```
@@ -306,7 +310,7 @@ Note: In 2.0. 15.0 and later versions, STABLE reserved words are supported. That
   Insert a record into table tb_name.
 
 - **Insert a record with data corresponding to a given column**
-   
+  
     ```mysql
     INSERT INTO tb_name (field1_name, ...) VALUES (field1_value1, ...);
     ```
@@ -320,14 +324,14 @@ Note: In 2.0. 15.0 and later versions, STABLE reserved words are supported. That
     Insert multiple records into table tb_name.
 
 - **Insert multiple records into a given column**
-    
+  
     ```mysql
     INSERT INTO tb_name (field1_name, ...) VALUES (field1_value1, ...) (field1_value2, ...) ...;
     ```
     Insert multiple records into a given column of table tb_name.
 
 - **Insert multiple records into multiple tables**
-    
+  
     ```mysql
     INSERT INTO tb1_name VALUES (field1_value1, ...) (field1_value2, ...) ...
                 tb2_name VALUES (field1_value1, ...) (field1_value2, ...) ...;
@@ -421,7 +425,7 @@ taos> SELECT * FROM d1001;
 Query OK, 3 row(s) in set (0.001165s)
 ```
 
-For Stables, wildcards contain *tag columns*.
+For STables, wildcards contain *tag columns*.
 
 ```mysql
 taos> SELECT * FROM meters;
@@ -670,7 +674,7 @@ Query OK, 1 row(s) in set (0.001091s)
     SELECT * FROM tb1 WHERE ts >= NOW - 1h;
     ```
 
-- Look up table tb1 from 2018-06-01 08:00:00. 000 to 2018-06-02 08:00:00. 000, and col3 string is a record ending in'nny ', and the result is in descending order of timestamp:
+- Look up table tb1 from 2018-06-01 08:00:00. 000 to 2018-06-02 08:00:00. 000, and col3 string is a record ending in 'nny ', and the result is in descending order of timestamp:
 
     ```mysql
     SELECT * FROM tb1 WHERE ts > '2018-06-01 08:00:00.000' AND ts <= '2018-06-02 08:00:00.000' AND col3 LIKE '%nny' ORDER BY ts DESC;
@@ -720,7 +724,7 @@ TDengine supports aggregations over data, they are listed below:
     ================================================
                         9 |                     9 |
     Query OK, 1 row(s) in set (0.004475s)
-  
+    
     taos> SELECT COUNT(*), COUNT(voltage) FROM d1001;
         count(*)        |    count(voltage)     |
     ================================================
@@ -758,7 +762,7 @@ TDengine supports aggregations over data, they are listed below:
   ```
 
 - **TWA**
-   
+  
   ```mysql
   SELECT TWA(field_name) FROM tb_name WHERE clause;
   ```
@@ -779,7 +783,7 @@ TDengine supports aggregations over data, they are listed below:
   
   Function: return the sum of a statistics/STable.
   
-  Return Data Type: long integer INMT64 and Double.
+  Return Data Type: INT64 and Double.
   
   Applicable Fields: All types except timestamp, binary, nchar, bool.
   
@@ -799,7 +803,7 @@ TDengine supports aggregations over data, they are listed below:
   ================================================================================
               35.200000763 |                   658 |               0.950000018 |
   Query OK, 1 row(s) in set (0.000980s)
-   ```
+  ```
 
 - **STDDEV**
   
@@ -896,7 +900,7 @@ TDengine supports aggregations over data, they are listed below:
    ======================================
                13.40000 |          223 |
    Query OK, 1 row(s) in set (0.001123s)
-  
+    
    taos> SELECT MAX(current), MAX(voltage) FROM d1001;
        max(current)     | max(voltage) |
    ======================================
@@ -937,8 +941,6 @@ TDengine supports aggregations over data, they are listed below:
    Query OK, 1 row(s) in set (0.001023s)
    ```
 
-- 
-
 - **LAST**
 
    ```mysql
@@ -972,7 +974,7 @@ TDengine supports aggregations over data, they are listed below:
    ```
 
 - **TOP**
-   
+  
     ```mysql
     SELECT TOP(field_name, K) FROM { tb_name | stb_name } [WHERE clause];
     ```
@@ -1029,7 +1031,7 @@ TDengine supports aggregations over data, they are listed below:
     2018-10-03 14:38:15.000 |                218 |
     2018-10-03 14:38:16.650 |                218 |
     Query OK, 2 row(s) in set (0.001332s)
-  
+    
     taos> SELECT BOTTOM(current, 2) FROM d1001;
             ts            |  bottom(current, 2)  |
     =================================================
@@ -1092,7 +1094,7 @@ TDengine supports aggregations over data, they are listed below:
     =======================
                 12.30000 |
     Query OK, 1 row(s) in set (0.001238s)
-  
+    
     taos> SELECT LAST_ROW(current) FROM d1002;
     last_row(current)   |
     =======================
@@ -1146,7 +1148,7 @@ TDengine supports aggregations over data, they are listed below:
     ============================
                 5.000000000 |
     Query OK, 1 row(s) in set (0.001792s)
-  
+    
     taos> SELECT SPREAD(voltage) FROM d1001;
         spread(voltage)      |
     ============================
@@ -1172,7 +1174,7 @@ TDengine supports aggregations over data, they are listed below:
 
 ## <a class="anchor" id="aggregation"></a> Time-dimension Aggregation
 
-TDengine supports aggregating by intervals. Data in a table can partitioned by intervals and aggregated to generate results. For example, a temperature sensor collects data once per second, but the average temperature needs to be queried every 10 minutes. This aggregation is suitable for down sample operation, and the syntax is as follows:
+TDengine supports aggregating by intervals (time range). Data in a table can partitioned by intervals and aggregated to generate results. For example, a temperature sensor collects data once per second, but the average temperature needs to be queried every 10 minutes. This aggregation is suitable for down sample operation, and the syntax is as follows:
 
 ```mysql
 SELECT function_list FROM tb_name
@@ -1195,7 +1197,7 @@ SELECT function_list FROM stb_name
 
 - FILL statement specifies a filling mode when data missed in a certain interval. Applicable filling modes include the following:
   
-  1. Do not fill: NONE (default filingl mode).
+  1. Do not fill: NONE (default filing mode).
   2. VALUE filling: Fixed value filling, where the filled value needs to be specified. For example: fill (VALUE, 1.23).
   3. NULL filling: Fill the data with NULL. For example: fill (NULL).
   4. PREV filling: Filling data with the previous non-NULL value. For example: fill (PREV).
@@ -1235,12 +1237,101 @@ SELECT AVG(current), MAX(current), LEASTSQUARES(current, start_val, step_val), P
 
 **Restrictions on group by**
 
-TAOS SQL supports group by operation on tags, tbnames and ordinary columns, required that only one column and whichhas less than 100,000 unique values.
+TAOS SQL supports group by operation on tags, tbnames and ordinary columns, required that only one column and which has less than 100,000 unique values.
 
 **Restrictions on join operation**
 
-TAOS SQL supports join columns of two tables by Primary Key timestamp between them, and does not support four operations after tables aggregated for the time being.
+TAOS SQL supports join columns of two tables by Primary Key timestamp between them, and does not support four arithmetic operations after tables aggregated for the time being.
 
 **Availability of is no null**
 
 Is not null supports all types of columns. Non-null expression is < > "" and only applies to columns of non-numeric types.
+
+**Restrictions on order by**
+
+- A non super table can only have one order by.
+- The super table can have at most two order by expression, and the second must be ts.
+- Order by tag must be the same tag as group by tag. TBNAME is as logical as tag.
+- Order by ordinary column must be the same ordinary column as group by or top/bottom. If both group by and top / bottom exist, order by must be in the same column as group by.
+- There are both order by and group by. The internal of the group is sorted by ts
+- Order by ts.
+
+## JSON type instructions
+- Syntax description
+
+  1. Create JSON type tag
+
+     ```mysql
+     create stable s1 (ts timestamp, v1 int) tags (info json)
+
+     create table s1_1 using s1 tags ('{"k1": "v1"}')
+     ```
+  3. JSON value operator(->)
+
+     ```mysql   
+     select * from s1 where info->'k1' = 'v1'
+
+     select info->'k1' from s1 
+     ```
+  4. JSON key existence operator(contains)
+
+     ```mysql
+     select * from s1 where info contains 'k2'
+    
+     select * from s1 where info contains 'k1'
+     ```
+
+- Supported operations
+
+  1. In where condition，support match/nmatch/between and/like/and/or/is null/is no null，in operator is not support.
+
+     ```mysql 
+     select * from s1 where info→'k1' match 'v*'; 
+
+     select * from s1 where info→'k1' like 'v%' and info contains 'k2';
+
+     select * from s1 where info is null; 
+  
+     select * from s1 where info->'k1' is not null
+     ```
+
+  2. JSON tag is supported in group by、order by、join clause、union all and subquery，like group by json->'key'
+
+  3. Support distinct operator.
+
+     ```mysql 
+     select distinct info→'k1' from s1
+     ```
+
+  5. Tag
+
+     Support change JSON tag（full coverage）
+
+     Support change the name of JSON tag
+
+     Not support add JSON tag, delete JSON tag
+
+- Other constraints
+
+  1. Only tag columns can use JSON type. If JSON tag is used, there can only be one tag column.
+
+  2. Length limit:The length of the key in JSON cannot exceed 256, and the key must be printable ASCII characters; The total length of JSON string does not exceed 4096 bytes.
+
+  3. JSON format restrictions:
+
+    1. JSON input string can be empty (""," ","\t" or null) or object, and cannot be nonempty string, boolean or array.
+    2. Object can be {}, if the object is {}, the whole JSON string is marked as empty. The key can be "", if the key is "", the K-V pair will be ignored in the JSON string.
+    3. Value can be a number (int/double) or string, bool or null, not an array. Nesting is not allowed.
+    4. If two identical keys appear in the JSON string, the first one will take effect.
+    5. Escape is not supported in JSON string.
+
+  4. Null is returned when querying the key that does not exist in JSON.
+
+  5. When JSON tag is used as the sub query result, parsing and querying the JSON string in the sub query is no longer supported in the upper level query.
+
+     The following query is not supported:
+     ```mysql 
+     select jtag→'key' from (select jtag from stable)
+      
+     select jtag->'key' from (select jtag from stable) where jtag->'key'>0
+     ```

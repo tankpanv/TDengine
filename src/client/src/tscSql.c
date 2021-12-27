@@ -29,6 +29,7 @@
 #include "ttimer.h"
 #include "tscProfile.h"
 
+static char clusterDefaultId[] = "clusterDefaultId";
 static bool validImpl(const char* str, size_t maxsize) {
   if (str == NULL) {
     return false;
@@ -193,7 +194,10 @@ TAOS *taos_connect_internal(const char *ip, const char *user, const char *pass, 
 
     tscBuildAndSendRequest(pSql, NULL);
     tsem_wait(&pSql->rspSem);
-
+    if (0 == strlen(pSql->pTscObj->clusterId)) {
+      memcpy(pSql->pTscObj->clusterId, clusterDefaultId, strlen(clusterDefaultId));
+    } 
+    pSql->pTscObj->pClusterInfo = (SClusterInfo *)tscAcquireClusterInfo(pSql->pTscObj->clusterId);
     if (pSql->res.code != TSDB_CODE_SUCCESS) {
       terrno = pSql->res.code;
       if (terrno ==TSDB_CODE_RPC_FQDN_ERROR) {
@@ -256,6 +260,7 @@ static void asyncConnCallback(void *param, TAOS_RES *tres, int code) {
   SSqlObj *pSql = (SSqlObj *) tres;
   assert(pSql != NULL);
   
+  pSql->pTscObj->pClusterInfo = (SClusterInfo *)tscAcquireClusterInfo(pSql->pTscObj->clusterId);
   pSql->fetchFp(pSql->param, tres, code);
 }
 
@@ -268,7 +273,6 @@ TAOS *taos_connect_a(char *ip, char *user, char *pass, char *db, uint16_t port, 
   }
 
   if (taos) *taos = pObj;
-
   pSql->fetchFp = fp;
   pSql->res.code = tscBuildAndSendRequest(pSql, NULL);
   tscDebug("%p DB async connection is opening", taos);
@@ -441,7 +445,7 @@ TAOS_FIELD *taos_fetch_fields(TAOS_RES *res) {
         // revise the length for binary and nchar fields
         if (f[j].type == TSDB_DATA_TYPE_BINARY) {
           f[j].bytes -= VARSTR_HEADER_SIZE;
-        } else if (f[j].type == TSDB_DATA_TYPE_NCHAR) {
+        } else if (f[j].type == TSDB_DATA_TYPE_NCHAR || f[j].type == TSDB_DATA_TYPE_JSON) {
           f[j].bytes = (f[j].bytes - VARSTR_HEADER_SIZE)/TSDB_NCHAR_SIZE;
         }
 
@@ -628,6 +632,10 @@ static bool hasAdditionalErrorInfo(int32_t code, SSqlCmd *pCmd) {
     return false;
   }
 
+  if (pCmd->payload == NULL) {
+    return false;
+  }
+
   size_t len = strlen(pCmd->payload);
 
   char *z = NULL;
@@ -776,6 +784,16 @@ bool taos_is_null(TAOS_RES *res, int32_t row, int32_t col) {
   return isNull(((char*) pSql->res.urow[col]) + row * pInfo->field.bytes, pInfo->field.type);
 }
 
+bool taos_is_update_query(TAOS_RES *res) {
+  SSqlObj *pSql = (SSqlObj *)res;
+  if (pSql == NULL || pSql->signature != pSql) {
+    return false;
+  }
+
+  SSqlCmd* pCmd = &pSql->cmd;
+  return ((pCmd->command >= TSDB_SQL_INSERT && pCmd->command <= TSDB_SQL_DROP_DNODE) || TSDB_SQL_RESET_CACHE == pCmd->command || TSDB_SQL_USE_DB == pCmd->command);
+}
+
 int taos_print_row(char *str, TAOS_ROW row, TAOS_FIELD *fields, int num_fields) {
   int len = 0;
 
@@ -879,6 +897,7 @@ int taos_validate_sql(TAOS *taos, const char *sql) {
 
   pSql->pTscObj  = taos;
   pSql->signature = pSql;
+  pSql->rootObj = pSql;
   SSqlCmd *pCmd = &pSql->cmd;
   
   pCmd->resColumnId = TSDB_RES_COL_ID;
@@ -892,7 +911,9 @@ int taos_validate_sql(TAOS *taos, const char *sql) {
     return TSDB_CODE_TSC_EXCEED_SQL_LIMIT;
   }
 
-  pSql->sqlstr = realloc(pSql->sqlstr, sqlLen + 1);
+  char* sqlstr = realloc(pSql->sqlstr, sqlLen + 1);
+  if(sqlstr == NULL && pSql->sqlstr) free(pSql->sqlstr);
+  pSql->sqlstr = sqlstr;
   if (pSql->sqlstr == NULL) {
     tscError("0x%"PRIx64" failed to malloc sql string buffer", pSql->self);
     tfree(pSql);
@@ -901,7 +922,6 @@ int taos_validate_sql(TAOS *taos, const char *sql) {
 
   strtolower(pSql->sqlstr, sql);
 
-//  pCmd->curSql = NULL;
   if (NULL != pCmd->insertParam.pTableBlockHashList) {
     taosHashCleanup(pCmd->insertParam.pTableBlockHashList);
     pCmd->insertParam.pTableBlockHashList = NULL;
@@ -924,6 +944,17 @@ int taos_validate_sql(TAOS *taos, const char *sql) {
 
   taos_free_result(pSql);
   return code;
+}
+
+void taos_reset_current_db(TAOS *taos) {
+  STscObj* pObj = (STscObj*) taos;
+  if (pObj == NULL || pObj->signature != pObj) {
+    return;
+  }
+
+  pthread_mutex_lock(&pObj->mutex);
+  memset(pObj->db, 0, tListLen(pObj->db));
+  pthread_mutex_unlock(&pObj->mutex);
 }
 
 void loadMultiTableMetaCallback(void *param, TAOS_RES *res, int code) {
@@ -975,7 +1006,7 @@ int taos_load_table_info(TAOS *taos, const char *tableNameList) {
 
   SArray* vgroupList = taosArrayInit(4, POINTER_BYTES);
   if (vgroupList == NULL) {
-    taosArrayDestroy(plist);
+    taosArrayDestroy(&plist);
     tfree(str);
     return TSDB_CODE_TSC_OUT_OF_MEMORY;
   }
@@ -985,14 +1016,15 @@ int taos_load_table_info(TAOS *taos, const char *tableNameList) {
 
   pSql->pTscObj   = taos;
   pSql->signature = pSql;
+  pSql->rootObj = pSql;
 
   int32_t code = (uint8_t) tscTransferTableNameList(pSql, str, length, plist);
   free(str);
 
   if (code != TSDB_CODE_SUCCESS) {
     tscFreeSqlObj(pSql);
-    taosArrayDestroyEx(plist, freeElem);
-    taosArrayDestroyEx(vgroupList, freeElem);
+    taosArrayDestroyEx(&plist, freeElem);
+    taosArrayDestroyEx(&vgroupList, freeElem);
     return code;
   }
 
@@ -1005,8 +1037,8 @@ int taos_load_table_info(TAOS *taos, const char *tableNameList) {
     code = TSDB_CODE_SUCCESS;
   }
 
-  taosArrayDestroyEx(plist, freeElem);
-  taosArrayDestroyEx(vgroupList, freeElem);
+  taosArrayDestroyEx(&plist, freeElem);
+  taosArrayDestroyEx(&vgroupList, freeElem);
 
   if (code != TSDB_CODE_SUCCESS) {
     tscFreeRegisteredSqlObj(pSql);

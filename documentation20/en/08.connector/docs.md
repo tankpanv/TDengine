@@ -2,7 +2,7 @@
 
 TDengine provides many connectors for development, including C/C++, JAVA, Python, RESTful, Go, Node.JS, etc.
 
-![image-connector](page://images/connector.png)
+![image-connector](../images/connector.png)
 
 At present, TDengine connectors support a wide range of platforms, including hardware platforms such as X64/X86/ARM64/ARM32/MIPS/Alpha, and development environments such as Linux/Win64/Win32. The comparison matrix is as follows:
 
@@ -66,7 +66,11 @@ Run install_client.sh to install.
 
 Edit the taos.cfg file (default path/etc/taos/taos.cfg) and change firstEP to End Point of the TDengine server, for example: [h1.taos.com](http://h1.taos.com/):6030.
 
-**Tip: If no TDengine service deployed in this machine, but only the application driver is installed, only firstEP needs to be configured in taos.cfg, and FQDN does not.**
+**Tip: **
+
+**1. If no TDengine service deployed in this machine, but only the application driver is installed, only firstEP needs to be configured in taos.cfg, and FQDN does not.**
+
+**2. To prevent “unable to resolve FQDN” error when connecting to the server, ensure that the hosts file of the client has the correct FQDN value.**
 
 **Windows x64/x86**
 
@@ -128,7 +132,7 @@ taos>
 
 **Windows (x64/x86) environment:**
 
-Under cmd, enter the c:\ tdengine directory and directly execute taos.exe, and you should be able to connect to tdengine service normally and jump to taos shell interface. For example:
+Under cmd, enter the c:\TDengine directory and directly execute taos.exe, and you should be able to connect to tdengine service normally and jump to taos shell interface. For example:
 
 ```mysql
   C:\TDengine>taos     
@@ -150,7 +154,7 @@ Under cmd, enter the c:\ tdengine directory and directly execute taos.exe, and y
 | **CPU Type**         | **x64****（****64bit****）** |         |         | **ARM64** | **ARM32**          |
 | -------------------- | ---------------------------- | ------- | ------- | --------- | ------------------ |
 | **OS Type**          | Linux                        | Win64   | Win32   | Linux     | Linux              |
-| **Supported or Not** | Yes                          | **Yes** | **Yes** | **Yes**   | **In development** |
+| **Supported or Not** | Yes                          | **Yes** | **Yes** | **Yes**   | **Yes** |
 
 The C/C++ API is similar to MySQL's C API. When application use it, it needs to include the TDengine header file taos.h (after installed, it is located in/usr/local/taos/include):
 
@@ -196,6 +200,8 @@ Create a database connection and initialize the connection context. The paramete
 * port: Port number
 
 A null return value indicates a failure. The application needs to save the returned parameters for subsequent API calls.
+Note: The same process can connect to multiple taosd processes based on ip/port
+
 
 - `char *taos_get_server_info(TAOS *taos)`
 
@@ -296,9 +302,7 @@ Asynchronous APIs have relatively high requirements for users, who can selective
 The asynchronous APIs of TDengine all use non-blocking calling mode. Applications can use multithreading to open multiple tables at the same time, and can query or insert to each open table at the same time. It should be pointed out that the **application client must ensure that the operation on the same table is completely serialized**, that is, when the insertion or query operation on the same table is not completed (when no result returned), the second insertion or query operation cannot be performed.
 
 
-
 <a class="anchor" id="stmt"></a>
-
 ### Parameter binding API
 
 In addition to calling `taos_query` directly for queries, TDengine also provides a Prepare API that supports parameter binding. Like MySQL, these APIs currently only support using question mark `?` to represent the parameters to be bound, as follows:
@@ -405,96 +409,153 @@ See [video tutorials](https://www.taosdata.com/blog/2020/11/11/1963.html) for th
 - python 2.7 or >= 3.4 installed
 - pip or pip3 installed
 
-### Python client installation
+### Python connector installation
 
-#### Linux
+From TDengine 2.4, users can install python connector for TDengine with `pip`. Note that the package name is **taospy** (not `taos` - a fully unrelated package). For backward compatibility, we still use `import taos` to import connector package.
 
-Users can find the connector package for python2 and python3 in the source code src/connector/python (or tar.gz/connector/python) folder. Users can install it through `pip` command:
-
-`pip install src/connector/python/linux/python2/`
-
-or
-
- `pip3 install src/connector/python/linux/python3/`
-
-#### Windows
-
-With Windows TDengine client installed, copy the file "C:\TDengine\driver\taos.dll" to the "C:\ windows\ system32" directory and enter the Windows <em>cmd</em> command line interface:
-
-```cmd
-cd C:\TDengine\connector\python
-python -m pip install .
+```bash
+pip install taospy
 ```
 
-- If there is no `pip` command on the machine, the user can copy the taos folder under src/connector/python to the application directory for use. For Windows client, after installing the TDengine Windows client, copy C:\ TDengine\driver\taos.dll to the C:\ windows\ system32 directory.
+Use your version-specific `pip` command as if you need.
+
+```bash
+pip2 install taospy
+pip3 install taospy
+```
+
+The python connector requires `libtaos` library (`libtaos.so` in Linux, or `taos.dll` in Windows). For Windows client, if `import taos` failed, you could copy the dll `C:\TDengine\driver\taos.dll` to `C:\windows\system32` and try it again.
+
+For users that has a limited network environment, just add the `connector/python` of installed directory(commonly `/usr/local/taos/connector/python/` in Linux,  `C:\TDengine\connector\python` in Windows) to `PYTHONPATH` environment variable.
 
 ### How to use
 
-#### Code sample
+#### PEP-249 Python Database API
 
-- Import the TDengine client module
+Definitely you can use the [PEP-249](https://www.python.org/dev/peps/pep-0249/) database API like other type of databases:
 
 ```python
 import taos
+
+conn = taos.connect()
+cursor = conn.cursor()
+
+cursor.execute("show databases")
+results = cursor.fetchall()
+for row in results:
+    print(row)
 ```
+
+##### Code sample
+
+- Import the TDengine client module
+
+    ```python
+    import taos
+    ```
 
 - Get the connection and cursor object
 
-```python
-conn = taos.connect(host="127.0.0.1", user="root", password="taosdata", config="/etc/taos")
-c1 = conn.cursor()
-```
+    ```python
+    conn = taos.connect(host="127.0.0.1", user="root", password="taosdata", config="/etc/taos")
+    c1 = conn.cursor()
+    ```
 
-- *host* covers all IPs of TDengine server-side, and *config* is the directory where the client configuration files is located
+    *host* covers all IPs of TDengine server-side, and *config* is the directory where the client configuration files is located
+
 - Write data
 
-```python
-import datetime
+    ```python
+    import datetime
 
-# Create a database
-c1.execute('create database db')
-c1.execute('use db')
-# Create a table
-c1.execute('create table tb (ts timestamp, temperature int, humidity float)')
-# Insert data
-start_time = datetime.datetime(2019, 11, 1)
-affected_rows = c1.execute('insert into tb values (\'%s\', 0, 0.0)' %start_time)
-# Insert data in batch
-time_interval = datetime.timedelta(seconds=60)
-sqlcmd = ['insert into tb values']
-for irow in range(1,11):
-  start_time += time_interval
-  sqlcmd.append('(\'%s\', %d, %f)' %(start_time, irow, irow*1.2))
-affected_rows = c1.execute(' '.join(sqlcmd))
-```
+    # Create a database
+    c1.execute('create database db')
+    c1.execute('use db')
+    # Create a table
+    c1.execute('create table tb (ts timestamp, temperature int, humidity float)')
+    # Insert data
+    start_time = datetime.datetime(2019, 11, 1)
+    affected_rows = c1.execute('insert into tb values (\'%s\', 0, 0.0)' %start_time)
+    # Insert data in batch
+    time_interval = datetime.timedelta(seconds=60)
+    sqlcmd = ['insert into tb values']
+    for irow in range(1,11):
+    start_time += time_interval
+    sqlcmd.append('(\'%s\', %d, %f)' %(start_time, irow, irow*1.2))
+    affected_rows = c1.execute(' '.join(sqlcmd))
+    ```
 
 - Query data
 
-```python
-c1.execute('select * from tb')
-# pull query result
-data = c1.fetchall()
-# The result is a list, with each row as an element
-numOfRows = c1.rowcount
-numOfCols = len(c1.description)
-for irow in range(numOfRows):
-  print("Row%d: ts=%s, temperature=%d, humidity=%f" %(irow, data[irow][0], data[irow][1],data[irow][2]))
+    ```python
+    c1.execute('select * from tb')
+    # pull query result
+    data = c1.fetchall()
+    # The result is a list, with each row as an element
+    numOfRows = c1.rowcount
+    numOfCols = len(c1.description)
+    for irow in range(numOfRows):
+    print("Row%d: ts=%s, temperature=%d, humidity=%f" %(irow, data[irow][0], data[irow][1],data[irow][2]))
 
-# Use cursor loop directly to pull query result
-c1.execute('select * from tb')
-for data in c1:
-  print("ts=%s, temperature=%d, humidity=%f" %(data[0], data[1],data[2]))
+    # Use cursor loop directly to pull query result
+    c1.execute('select * from tb')
+    for data in c1:
+    print("ts=%s, temperature=%d, humidity=%f" %(data[0], data[1],data[2]))
+    ```
+
+#### Query API
+
+Since v2.1.0, python connector provides a new API for query:
+
+```python
+import taos
+
+conn = taos.connect()
+conn.execute("create database if not exists pytest")
+
+result = conn.query("show databases")
+num_of_fields = result.field_count
+for field in result.fields:
+    print(field)
+for row in result:
+    print(row)
+conn.execute("drop database pytest")
 ```
 
-- Create subscription
+The `query` method returns `TaosResult` class. It provides high level APIs for convenient use:
+
+Properties:
+
+- `fields`: the `TaosFields` object contains the column metadata, given the collection of each column field metadata by iterator.
+- `field_count`: column number of result.
+- `affected_rows`: the rows completed for insert.
+- `row_count`: the rows number for select.
+- `precision`: the result precision.
+
+Functions:
+
+- `fetch_all()`: get all data as tuple array.
+- `fetch_all_into_dict()`: get all data as dict array, added since v2.1.1
+- `blocks_iter()`: provides iterator by C `taos_fetch_blocks` API
+- `rows_iter()`: provides iterator by C `taos_fetch_row` API
+- `fetch_rows_a`: fetch rows by async API in taosc.
+- `errno`: error code if failed.
+- `errstr`: error string if failed.
+- `close`: close result, you do not need to call it directly, result will auto closed out of scope.
+
+#### Subscription API
+
+Create subscription
 
 ```python
 # Create a subscription with the topic ‘test’ and a consumption cycle of 1000 milliseconds
-# If the first parameter is True, it means restarting the subscription. If it is False and a subscription with the topic 'test 'has been created before, it means continuing to consume the data of this subscription instead of restarting to consume all the data
+# If the first parameter is True, it means restarting the subscription. 
+# If it is False and a subscription with the topic 'test 'has been created before,
+# it means continuing to consume the data of this subscription instead of restarting to consume all the data
 sub = conn.subscribe(True, "test", "select * from tb;", 1000)
 ```
 
-- Consume subscription data
+Consume subscription data.
 
 ```python
 data = sub.consume()
@@ -502,18 +563,60 @@ for d in data:
     print(d)
 ```
 
-- Unsubscription
+Unsubscribe.
 
 ```python
 sub.close()
 ```
 
-- Close connection
+Close connection.
 
 ```python
-c1.close()
 conn.close()
 ```
+
+#### JSON Type Support
+
+Python connector `taospy` starts supporting JSON type as tags since `v2.2.0` (requires TDengine beta v2.3.5+, or stable v2.4.0+).
+
+Create stable and table with JSON tag.
+
+```python
+# encoding:UTF-8
+import taos
+
+conn = taos.connect()
+conn.execute("create database if not exists py_test_json_type")
+conn.execute("use py_test_json_type")
+
+conn.execute("create stable s1 (ts timestamp, v1 int) tags (info json)")
+conn.execute("create table s1_1 using s1 tags ('{\"k1\": \"v1\"}')")
+```
+
+Query JSON tag and table name from a stable.
+
+```python
+tags = conn.query("select info, tbname from s1").fetch_all_into_dict()
+tags
+```
+
+The `tags` value is:
+
+```python
+[{'info': '{"k1":"v1"}', 'tbname': 's1_1'}]
+```
+
+To get value from JSON tag by key:
+
+```python
+k1 = conn.query("select info->'k1' as k1 from s1").fetch_all_into_dict()
+"""
+>>> k1
+[{'k1': '"v1"'}]
+"""
+```
+
+Refer to [JSON type instructions](https://www.taosdata.com/en/documentation/taos-sql) for more usage of JSON type.
 
 #### Using nanosecond in Python connector
 
@@ -538,7 +641,7 @@ Refer to help (taos.TDengineCursor) in python. This class corresponds to the wri
 
 Used to generate an instance of taos.TDengineConnection.
 
-### Python client code sample
+### Python connector code sample
 
 In tests/examples/python, we provide a sample Python program read_example. py to guide you to design your own write and query program. After installing the corresponding client, introduce the taos class through `import taos`. The steps are as follows:
 
@@ -608,11 +711,11 @@ The return value is in JSON format, as follows:
 ```json
 {
     "status": "succ",
-    "head": ["ts","current", …],
-    "column_meta": [["ts",9,8],["current",6,4], …],
+    "head": ["ts","current",...],
+    "column_meta": [["ts",9,8],["current",6,4], ...],
     "data": [
-        ["2018-10-03 14:38:05.000", 10.3, …],
-        ["2018-10-03 14:38:15.000", 12.6, …]
+        ["2018-10-03 14:38:05.000", 10.3, ...],
+        ["2018-10-03 14:38:15.000", 12.6, ...]
     ],
     "rows": 2
 } 
@@ -772,37 +875,60 @@ Only some configuration parameters related to RESTful interface are listed below
 
 ## <a class="anchor" id="csharp"></a> CSharp Connector
 
-The C # connector supports: Linux 64/Windows x64/Windows x86.
+
+* The C # connector supports: Linux 64/Windows x64/Windows x86.
+* C# connector can be download and include as normal table form [Nuget.org](https://www.nuget.org/packages/TDengine.Connector/).
+* On Windows, C # applications can use the native C interface of TDengine to perform all database operations, and future versions will provide the ORM (Dapper) framework driver.
 
 ### Installation preparation
 
-- For application driver installation, please refer to the[ steps of installing connector driver](https://www.taosdata.com/en/documentation/connector#driver).
-- . NET interface file TDengineDrivercs.cs and reference sample TDengineTest.cs are both located in the Windows client install_directory/examples/C# directory.
-- On Windows, C # applications can use the native C interface of TDengine to perform all database operations, and future versions will provide the ORM (Dapper) framework driver.
+* For application driver installation, please refer to the[ steps of installing connector driver](https://www.taosdata.com/en/documentation/connector#driver).
+* .NET interface file TDengineDrivercs.cs and reference sample TDengineTest.cs are both located in the Windows client install_directory/examples/C# directory.
+* Install [.NET SDK](https://dotnet.microsoft.com/download)
+
+### Example Source Code
+you can find sample code under follow directions:
+* {client_install_directory}/examples/C#
+* [github C# example source code](https://github.com/taosdata/TDengine/tree/develop/tests/examples/C%2523)
+
+**Tips:** TDengineTest.cs       One of C# connector's sample code that include basic examples like connection,sql executions and so on.
 
 ### Installation verification
+Run {client_install_directory}/examples/C#/C#Checker/C#Checker.cs
 
-Run install_directory/examples/C#/C#Checker/C#Checker.exe
-
+Need install .Net SDK first
 ```cmd
-cd {install_directory}/examples/C#/C#Checker
-csc /optimize *.cs
-C#Checker.exe -h <fqdn>
+cd {client_install_directory}/examples/C#/C#Checker
+//run c#checker.cs
+dotnet run -- -h <FQDN> //dotnet run will build project first by default.
 ```
 
 ### How to use C# connector
-
 On Windows system, .NET applications can use the .NET interface of TDengine to perform all database operations. The steps to use it are as follows:
 
-1. Add the. NET interface file TDengineDrivercs.cs to the .NET project where the application is located.
-2. Users can refer to TDengineTest.cs to define database connection parameters and how to perform data insert, query and other operations;
+need to install .NET SDK first
+* create a c# project. 
+``` cmd
+mkdir test
+cd test 
+dotnet new console
+```
+* add TDengineDriver as an package through Nuget
 
-This. NET interface requires the taos.dll file, so before executing the application, copy the taos.dll file in the Windows client install_directory/driver directory to the folder where the. NET project finally generated the .exe executable file. After running the exe file, you can access the TDengine database and do operations such as insert and query.
+``` cmd
+dotnet add package TDengine.Connector
+```
+* include the TDnengineDriver in you application's namespace 
+```C#
+using TDengineDriver;
+```
+* user can reference from[TDengineTest.cs](https://github.com/taosdata/TDengine/tree/develop/tests/examples/C%2523/TDengineTest) and learn how to define database connection,query,insert and other basic data manipulations.
 
 **Note:**
 
-1. TDengine V2.0. 3.0 supports both 32-bit and 64-bit Windows systems, so when. NET project generates a .exe file, please select the corresponding "X86" or "x64" for the "Platform" under "Solution"/"Project".
-2. This. NET interface has been verified in Visual Studio 2015/2017, and other VS versions have yet to be verified.
+* TDengine V2.0. 3.0 supports both 32-bit and 64-bit Windows systems, so when. NET project generates a .exe file, please select the corresponding "X86" or "x64" for the "Platform" under "Solution"/"Project".
+* This. NET interface has been verified in Visual Studio 2015/2017, and other VS versions have yet to be verified.
+* Since this. NET connector interface requires the taos.dll file, so before executing the application, copy the taos.dll file in the Windows {client_install_directory}/driver directory to the folder where the. NET project finally generated the .exe executable file. After running the exe file, you can access the TDengine database and do operations such as insert and query(This step can be skip if the client has been installed on you machine).
 
 ### Third-party Driver
 
@@ -823,12 +949,12 @@ https://www.taosdata.com/blog/2020/11/02/1901.html
 
 The TDengine provides the GO driver taosSql. taosSql implements the GO language's built-in interface database/sql/driver. Users can access TDengine in the application by simply importing the package as follows, see https://github.com/taosdata/driver-go/blob/develop/taosSql/driver_test.go for details.
 
-Sample code for using the Go connector can be found in https://github.com/taosdata/TDengine/tree/develop/tests/examples/go and the [video tutorial](https://www.taosdata.com/blog/2020/11/11/1951.html).
+Sample code for using the Go connector can be found in https://github.com/taosdata/TDengine/tree/develop/tests/examples/go .
 
 ```Go
 import (
     "database/sql"
-    _ "github.com/taosdata/driver-go/taosSql"
+    _ "github.com/taosdata/driver-go/v2/taosSql"
 )
 ```
 
@@ -838,6 +964,8 @@ import (
 go env -w GO111MODULE=on  
 go env -w GOPROXY=https://goproxy.io,direct  
 ```
+
+`taosSql` v2 completed refactoring of the v1 version and separated the built-in database operation interface `database/sql/driver` to the directory `taosSql`, and put other advanced functions such as subscription and stmt into the directory `af`.
 
 ### Common APIs
 
@@ -937,7 +1065,7 @@ After installing the TDengine client, the nodejsChecker.js program can verify wh
 
 Steps:
 
-1. Create a new installation verification directory, for example: ~/tdengine-test, copy the nodejsChecker.js source program on github. Download address: （https://github.com/taosdata/TDengine/tree/develop/tests/examples/nodejs/nodejsChecker.js）.
+1. Create a new installation verification directory, for example: `~/tdengine-test`, copy the nodejsChecker.js source program on github. Download address: （https://github.com/taosdata/TDengine/tree/develop/tests/examples/nodejs/nodejsChecker.js）.
 
 2. Execute the following command:
 
@@ -951,7 +1079,7 @@ Steps:
 
 ### How to use Node.js
 
-The following are some basic uses of node.js connector. Please refer to [TDengine Node.js connector](http://docs.taosdata.com/node) for details.
+The following are some basic uses of node.js connector. Please refer to [TDengine Node.js connector](https://github.com/taosdata/TDengine/tree/develop/src/connector/nodejs)for details.
 
 ### Create connection
 

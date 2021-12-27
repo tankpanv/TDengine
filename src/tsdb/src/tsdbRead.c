@@ -25,6 +25,8 @@
 #include "tlosertree.h"
 #include "tsdbint.h"
 #include "texpr.h"
+#include "qFilter.h"
+#include "cJSON.h"
 
 #define EXTRA_BYTES 2
 #define ASCENDING_TRAVERSE(o)   (o == TSDB_ORDER_ASC)
@@ -156,6 +158,7 @@ typedef struct STableGroupSupporter {
 static STimeWindow updateLastrowForEachGroup(STableGroupInfo *groupList);
 static int32_t checkForCachedLastRow(STsdbQueryHandle* pQueryHandle, STableGroupInfo *groupList);
 static int32_t checkForCachedLast(STsdbQueryHandle* pQueryHandle);
+static int32_t lazyLoadCacheLast(STsdbQueryHandle* pQueryHandle);
 static int32_t tsdbGetCachedLastRow(STable* pTable, SMemRow* pRes, TSKEY* lastKey);
 
 static void    changeQueryHandleForInterpQuery(TsdbQueryHandleT pHandle);
@@ -167,6 +170,7 @@ static int32_t doGetExternalRow(STsdbQueryHandle* pQueryHandle, int16_t type, SM
 static void*   doFreeColumnInfoData(SArray* pColumnInfoData);
 static void*   destroyTableCheckInfo(SArray* pTableCheckInfo);
 static bool    tsdbGetExternalRow(TsdbQueryHandleT pHandle);
+static int32_t tsdbQueryTableList(STable* pTable, SArray* pRes, void* filterInfo);
 
 static void tsdbInitDataBlockLoadInfo(SDataBlockLoadInfo* pBlockLoadInfo) {
   pBlockLoadInfo->slot = -1;
@@ -215,7 +219,7 @@ static void tsdbMayTakeMemSnapshot(STsdbQueryHandle* pQueryHandle, SArray* psTab
     tsdbTakeMemSnapshot(pQueryHandle->pTsdb, &(pMemRef->snapshot), psTable);
   }
 
-  taosArrayDestroy(psTable);
+  taosArrayDestroy(&psTable);
 }
 
 static void tsdbMayUnTakeMemSnapshot(STsdbQueryHandle* pQueryHandle) {
@@ -273,7 +277,7 @@ static SArray* createCheckInfoFromTableGroup(STsdbQueryHandle* pQueryHandle, STa
 
   SArray* pTable = taosArrayInit(4, sizeof(STable*));
   if (pTable == NULL) {
-    taosArrayDestroy(pTableCheckInfo);
+    taosArrayDestroy(&pTableCheckInfo);
     return NULL;
   }
 
@@ -288,8 +292,6 @@ static SArray* createCheckInfoFromTableGroup(STsdbQueryHandle* pQueryHandle, STa
       STableKeyInfo* pKeyInfo = (STableKeyInfo*) taosArrayGet(group, j);
 
       STableCheckInfo info = { .lastKey = pKeyInfo->lastKey, .pTableObj = pKeyInfo->pTable };
-      info.tableId = ((STable*)(pKeyInfo->pTable))->tableId;
-
       assert(info.pTableObj != NULL && (info.pTableObj->type == TSDB_NORMAL_TABLE ||
                                         info.pTableObj->type == TSDB_CHILD_TABLE || info.pTableObj->type == TSDB_STREAM_TABLE));
 
@@ -503,7 +505,7 @@ TsdbQueryHandleT* tsdbQueryTables(STsdbRepo* tsdb, STsdbQueryCond* pCond, STable
   pQueryHandle->pTableCheckInfo = createCheckInfoFromTableGroup(pQueryHandle, groupList, pMeta, &psTable);
   if (pQueryHandle->pTableCheckInfo == NULL) {
     tsdbCleanupQueryHandle(pQueryHandle);
-    taosArrayDestroy(psTable);
+    taosArrayDestroy(&psTable);
     terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
     return NULL;
   }
@@ -591,6 +593,28 @@ void tsdbResetQueryHandleForNewTable(TsdbQueryHandleT queryHandle, STsdbQueryCon
   pQueryHandle->next = doFreeColumnInfoData(pQueryHandle->next);
 }
 
+static int32_t lazyLoadCacheLast(STsdbQueryHandle* pQueryHandle) {
+  STsdbRepo* pRepo = pQueryHandle->pTsdb;
+
+  size_t  numOfTables = taosArrayGetSize(pQueryHandle->pTableCheckInfo);
+  int32_t code = 0;
+  for (size_t i = 0; i < numOfTables; ++i) {
+    STableCheckInfo* pCheckInfo = taosArrayGet(pQueryHandle->pTableCheckInfo, i);
+    STable*          pTable = pCheckInfo->pTableObj;
+    if (pTable->cacheLastConfigVersion == pRepo->cacheLastConfigVersion) {
+      continue;
+    }
+    code = tsdbLoadLastCache(pRepo, pTable);
+    if (code != 0) {
+      tsdbError("%p uid:%" PRId64 ", tid:%d, failed to load last cache since %s", pQueryHandle, pTable->tableId.uid,
+                pTable->tableId.tid, tstrerror(terrno));
+      break;
+    }
+  }
+
+  return code;
+}
+
 TsdbQueryHandleT tsdbQueryLastRow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *groupList, uint64_t qId, SMemRef* pMemRef) {
   pCond->twindow = updateLastrowForEachGroup(groupList);
 
@@ -603,6 +627,8 @@ TsdbQueryHandleT tsdbQueryLastRow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STable
   if (pQueryHandle == NULL) {
     return NULL;
   }
+
+  lazyLoadCacheLast(pQueryHandle);
 
   int32_t code = checkForCachedLastRow(pQueryHandle, groupList);
   if (code != TSDB_CODE_SUCCESS) { // set the numOfTables to be 0
@@ -618,12 +644,13 @@ TsdbQueryHandleT tsdbQueryLastRow(STsdbRepo *tsdb, STsdbQueryCond *pCond, STable
   return pQueryHandle;
 }
 
-
 TsdbQueryHandleT tsdbQueryCacheLast(STsdbRepo *tsdb, STsdbQueryCond *pCond, STableGroupInfo *groupList, uint64_t qId, SMemRef* pMemRef) {
   STsdbQueryHandle *pQueryHandle = (STsdbQueryHandle*) tsdbQueryTables(tsdb, pCond, groupList, qId, pMemRef);
   if (pQueryHandle == NULL) {
     return NULL;
   }
+
+  lazyLoadCacheLast(pQueryHandle);
 
   int32_t code = checkForCachedLast(pQueryHandle);
   if (code != TSDB_CODE_SUCCESS) { // set the numOfTables to be 0
@@ -655,57 +682,10 @@ SArray* tsdbGetQueriedTableList(TsdbQueryHandleT *pHandle) {
   return res;
 }
 
-// leave only one table for each group
-static STableGroupInfo* trimTableGroup(STimeWindow* window, STableGroupInfo* pGroupList) {
-  assert(pGroupList);
-  size_t numOfGroup = taosArrayGetSize(pGroupList->pGroupList);
-
-  STableGroupInfo* pNew = calloc(1, sizeof(STableGroupInfo));
-  pNew->pGroupList = taosArrayInit(numOfGroup, POINTER_BYTES);
-
-  for(int32_t i = 0; i < numOfGroup; ++i) {
-    SArray* oneGroup = taosArrayGetP(pGroupList->pGroupList, i);
-    size_t numOfTables = taosArrayGetSize(oneGroup);
-
-    SArray* px = taosArrayInit(4, sizeof(STableKeyInfo));
-    for (int32_t j = 0; j < numOfTables; ++j) {
-      STableKeyInfo* pInfo = (STableKeyInfo*)taosArrayGet(oneGroup, j);
-      if (window->skey <= pInfo->lastKey && ((STable*)pInfo->pTable)->lastKey != TSKEY_INITIAL_VAL) {
-        taosArrayPush(px, pInfo);
-        pNew->numOfTables += 1;
-        break;
-      }
-    }
-
-    // there are no data in this group
-    if (taosArrayGetSize(px) == 0) {
-      taosArrayDestroy(px);
-    } else {
-      taosArrayPush(pNew->pGroupList, &px);
-    }
-  }
-
-  return pNew;
-}
-
 TsdbQueryHandleT tsdbQueryRowsInExternalWindow(STsdbRepo *tsdb, STsdbQueryCond* pCond, STableGroupInfo *groupList, uint64_t qId, SMemRef* pRef) {
-  STableGroupInfo* pNew = trimTableGroup(&pCond->twindow, groupList);
-
-  if (pNew->numOfTables == 0) {
-    tsdbDebug("update query time range to invalidate time window");
-
-    assert(taosArrayGetSize(pNew->pGroupList) == 0);
-    bool asc = ASCENDING_TRAVERSE(pCond->order);
-    if (asc) {
-      pCond->twindow.ekey = pCond->twindow.skey - 1;
-    } else {
-      pCond->twindow.skey = pCond->twindow.ekey - 1;
-    }
-  }
-
-  STsdbQueryHandle *pQueryHandle = (STsdbQueryHandle*) tsdbQueryTables(tsdb, pCond, pNew, qId, pRef);
-  pQueryHandle->loadExternalRow = true;
-  pQueryHandle->currentLoadExternalRows = true;
+  STsdbQueryHandle *pQueryHandle = (STsdbQueryHandle*) tsdbQueryTables(tsdb, pCond, groupList, qId, pRef);
+  //pQueryHandle->loadExternalRow = true;
+  //pQueryHandle->currentLoadExternalRows = true;
 
   return pQueryHandle;
 }
@@ -851,21 +831,34 @@ static TSKEY extractFirstTraverseKey(STableCheckInfo* pCheckInfo, int32_t order,
     if(update == TD_ROW_DISCARD_UPDATE){
       pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
       tSkipListIterNext(pCheckInfo->iter);
+      return r2;
     }
     else if(update == TD_ROW_OVERWRITE_UPDATE) {
       pCheckInfo->chosen = CHECKINFO_CHOSEN_MEM;
       tSkipListIterNext(pCheckInfo->iiter);
+      return r1;
     } else {
       pCheckInfo->chosen = CHECKINFO_CHOSEN_BOTH;
+      return r1;
     }
-    return r1;
-  } else if (r1 < r2 && ASCENDING_TRAVERSE(order)) {
-    pCheckInfo->chosen = CHECKINFO_CHOSEN_MEM;
-    return r1;
-  }
-  else {
-    pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
-    return r2;
+  } else {
+    if (ASCENDING_TRAVERSE(order)) {
+      if (r1 < r2) {
+        pCheckInfo->chosen = CHECKINFO_CHOSEN_MEM;
+        return r1;
+      } else {
+        pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
+        return r2;
+      }
+    } else {
+      if (r1 < r2) {
+        pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
+        return r2;
+      } else {
+        pCheckInfo->chosen = CHECKINFO_CHOSEN_MEM;
+        return r1;
+      }
+    }
   }
 }
 
@@ -930,7 +923,7 @@ static SMemRow getSMemRowInTableMem(STableCheckInfo* pCheckInfo, int32_t order, 
         pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
         return rimem;
       } else {
-        pCheckInfo->chosen = CHECKINFO_CHOSEN_IMEM;
+        pCheckInfo->chosen = CHECKINFO_CHOSEN_MEM;
         return rmem;
       }
     }
@@ -1088,21 +1081,10 @@ static int32_t loadBlockInfo(STsdbQueryHandle * pQueryHandle, int32_t index, int
     return 0;  // no data blocks in the file belongs to pCheckInfo->pTable
   }
 
-  if (pCheckInfo->compSize < (int32_t)compIndex->len) {
-    assert(compIndex->len > 0);
+  assert(compIndex->len > 0);
 
-    char* t = realloc(pCheckInfo->pCompInfo, compIndex->len);
-    if (t == NULL) {
-      terrno = TSDB_CODE_TDB_OUT_OF_MEMORY;
-      code = TSDB_CODE_TDB_OUT_OF_MEMORY;
-      return code;
-    }
-
-    pCheckInfo->pCompInfo = (SBlockInfo*)t;
-    pCheckInfo->compSize = compIndex->len;
-  }
-
-  if (tsdbLoadBlockInfo(&(pQueryHandle->rhelper), (void*)(pCheckInfo->pCompInfo)) < 0) {
+  if (tsdbLoadBlockInfo(&(pQueryHandle->rhelper), (void**)(&pCheckInfo->pCompInfo),
+                        (uint32_t*)(&pCheckInfo->compSize)) < 0) {
     return terrno;
   }
   SBlockInfo* pCompInfo = pCheckInfo->pCompInfo;
@@ -1329,11 +1311,11 @@ static int32_t handleDataMergeIfNeeded(STsdbQueryHandle* pQueryHandle, SBlock* p
 
     assert(cur->blockCompleted);
     if (cur->rows == binfo.rows) {
-      tsdbDebug("%p whole file block qualified, brange:%"PRId64"-%"PRId64", rows:%d, lastKey:%"PRId64", %"PRIx64,
-                pQueryHandle, cur->win.skey, cur->win.ekey, cur->rows, cur->lastKey, pQueryHandle->qId);
+      tsdbDebug("%p whole file block qualified, brange:%"PRId64"-%"PRId64", rows:%d, lastKey:%"PRId64", tid:%d, %"PRIx64,
+                pQueryHandle, cur->win.skey, cur->win.ekey, cur->rows, cur->lastKey, binfo.tid, pQueryHandle->qId);
     } else {
-      tsdbDebug("%p create data block from remain file block, brange:%"PRId64"-%"PRId64", rows:%d, total:%d, lastKey:%"PRId64", %"PRIx64,
-                pQueryHandle, cur->win.skey, cur->win.ekey, cur->rows, binfo.rows, cur->lastKey, pQueryHandle->qId);
+      tsdbDebug("%p create data block from remain file block, brange:%"PRId64"-%"PRId64", rows:%d, total:%d, lastKey:%"PRId64", tid:%d, %"PRIx64,
+                pQueryHandle, cur->win.skey, cur->win.ekey, cur->rows, binfo.rows, cur->lastKey, binfo.tid, pQueryHandle->qId);
     }
 
   }
@@ -1396,66 +1378,63 @@ static int32_t loadFileDataBlock(STsdbQueryHandle* pQueryHandle, SBlock* pBlock,
   return code;
 }
 
-static int doBinarySearchKey(char* pValue, int num, TSKEY key, int order) {
-  int    firstPos, lastPos, midPos = -1;
-  int    numOfRows;
-  TSKEY* keyList;
-
-  assert(order == TSDB_ORDER_ASC || order == TSDB_ORDER_DESC);
-
-  if (num <= 0) return -1;
-
-  keyList = (TSKEY*)pValue;
-  firstPos = 0;
-  lastPos = num - 1;
-
-  if (order == TSDB_ORDER_DESC) {
+// search last keyList[ret] < key order asc  and keyList[ret] > key order desc   
+static int doBinarySearchKey(TSKEY* keyList, int num, int pos, TSKEY key, int order) {
+  // start end posistion
+  int s, e;
+  s = pos;
+  
+  // check
+  assert(pos >=0 && pos < num);
+  assert(num > 0);
+ 
+  if (order == TSDB_ORDER_ASC) {
     // find the first position which is smaller than the key
+    e  = num - 1;
+    if (key < keyList[pos]) 
+      return -1;  
     while (1) {
-      if (key >= keyList[lastPos]) return lastPos;
-      if (key == keyList[firstPos]) return firstPos;
-      if (key < keyList[firstPos]) return firstPos - 1;
-
-      numOfRows = lastPos - firstPos + 1;
-      midPos = (numOfRows >> 1) + firstPos;
-
-      if (key < keyList[midPos]) {
-        lastPos = midPos - 1;
-      } else if (key > keyList[midPos]) {
-        firstPos = midPos + 1;
-      } else {
-        break;
-      }
+      // check can return 
+      if (key >= keyList[e]) 
+        return e;
+      if (key <= keyList[s]) 
+        return s;
+      if (e - s <= 1)
+        return s;
+      
+      // change start or end position
+      int mid = s + (e - s + 1)/2;
+      if (keyList[mid] > key)
+        e = mid;
+      else if(keyList[mid] < key)
+        s = mid;
+      else
+        return mid;
     }
-
-  } else {
+  } else { // DESC 
     // find the first position which is bigger than the key
-    while (1) {
-      if (key <= keyList[firstPos]) return firstPos;
-      if (key == keyList[lastPos]) return lastPos;
-
-      if (key > keyList[lastPos]) {
-        lastPos = lastPos + 1;
-        if (lastPos >= num)
-          return -1;
+    e  = 0;
+    if (key > keyList[pos]) 
+        return -1;  
+      while (1) {
+        // check can return 
+        if (key <= keyList[e]) 
+          return e;
+        if (key >= keyList[s]) 
+          return s;
+        if (s - e <= 1)
+          return s;
+        
+        // change start or end position
+        int mid = s - (s - e + 1)/2;
+        if (keyList[mid] < key)
+          e = mid;
+        else if(keyList[mid] > key)
+          s = mid;
         else
-          return lastPos;
-      }
-
-      numOfRows = lastPos - firstPos + 1;
-      midPos = (numOfRows >> 1) + firstPos;
-
-      if (key < keyList[midPos]) {
-        lastPos = midPos - 1;
-      } else if (key > keyList[midPos]) {
-        firstPos = midPos + 1;
-      } else {
-        break;
-      }
+          return mid;
+      }    
     }
-  }
-
-  return midPos;
 }
 
 static int32_t doCopyRowsFromFileBlock(STsdbQueryHandle* pQueryHandle, int32_t capacity, int32_t numOfRows, int32_t start, int32_t end) {
@@ -1563,7 +1542,7 @@ static void mergeTwoRowFromMem(STsdbQueryHandle* pQueryHandle, int32_t capacity,
   int16_t offset;
 
   bool isRow1DataRow = isDataRow(row1);
-  bool isRow2DataRow;
+  bool isRow2DataRow = false;
   bool isChosenRowDataRow;
   int32_t chosen_itr;
   void *value;
@@ -1572,7 +1551,7 @@ static void mergeTwoRowFromMem(STsdbQueryHandle* pQueryHandle, int32_t capacity,
   int32_t numOfColsOfRow1 = 0;
 
   if (pSchema1 == NULL) {
-    pSchema1 = tsdbGetTableSchemaByVersion(pTable, dataRowVersion(row1));
+    pSchema1 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row1), (int8_t)memRowType(row1));
   }
   if(isRow1DataRow) {
     numOfColsOfRow1 = schemaNCols(pSchema1);
@@ -1584,7 +1563,7 @@ static void mergeTwoRowFromMem(STsdbQueryHandle* pQueryHandle, int32_t capacity,
   if(row2) {
     isRow2DataRow = isDataRow(row2);
     if (pSchema2 == NULL) {
-      pSchema2 = tsdbGetTableSchemaByVersion(pTable, dataRowVersion(row2));
+      pSchema2 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row2), (int8_t)memRowType(row2));
     }
     if(isRow2DataRow) {
       numOfColsOfRow2 = schemaNCols(pSchema2);
@@ -1665,7 +1644,7 @@ static void mergeTwoRowFromMem(STsdbQueryHandle* pQueryHandle, int32_t capacity,
       SColIdx *pColIdx = kvRowColIdxAt(rowBody, chosen_itr);
       colId = pColIdx->colId;
       offset = pColIdx->offset;
-      value = tdGetKvRowDataOfCol(rowBody, pColIdx->offset);
+      value = tdGetKvRowDataOfCol(rowBody, offset);
     }
 
 
@@ -1863,7 +1842,6 @@ static void copyAllRemainRowsFromFileBlock(STsdbQueryHandle* pQueryHandle, STabl
 int32_t getEndPosInDataBlock(STsdbQueryHandle* pQueryHandle, SDataBlockInfo* pBlockInfo) {
   // NOTE: reverse the order to find the end position in data block
   int32_t endPos = -1;
-  int32_t order = ASCENDING_TRAVERSE(pQueryHandle->order)? TSDB_ORDER_DESC : TSDB_ORDER_ASC;
 
   SQueryFilePos* cur = &pQueryHandle->cur;
   SDataCols* pCols = pQueryHandle->rhelper.pDCols[0];
@@ -1876,7 +1854,9 @@ int32_t getEndPosInDataBlock(STsdbQueryHandle* pQueryHandle, SDataBlockInfo* pBl
     cur->mixBlock = (cur->pos != pBlockInfo->rows - 1);
   } else {
     assert(pCols->numOfRows > 0);
-    endPos = doBinarySearchKey(pCols->cols[0].pData, pCols->numOfRows, pQueryHandle->window.ekey, order);
+    int pos = ASCENDING_TRAVERSE(pQueryHandle->order)? 0 : pBlockInfo->rows - 1;
+    endPos = doBinarySearchKey(pCols->cols[0].pData, pCols->numOfRows, pos, pQueryHandle->window.ekey, pQueryHandle->order);
+    assert(endPos != -1);
     cur->mixBlock = true;
   }
 
@@ -1896,17 +1876,16 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
   assert(pCols->cols[0].type == TSDB_DATA_TYPE_TIMESTAMP && pCols->cols[0].colId == PRIMARYKEY_TIMESTAMP_COL_INDEX &&
       cur->pos >= 0 && cur->pos < pBlock->numOfRows);
 
-  TSKEY* tsArray = pCols->cols[0].pData;
-  assert(pCols->numOfRows == pBlock->numOfRows && tsArray[0] == pBlock->keyFirst && tsArray[pBlock->numOfRows-1] == pBlock->keyLast);
-
-  // for search the endPos, so the order needs to reverse
-  int32_t order = (pQueryHandle->order == TSDB_ORDER_ASC)? TSDB_ORDER_DESC:TSDB_ORDER_ASC;
+  // key read from file
+  TSKEY* keyFile = pCols->cols[0].pData;
+  assert(pCols->numOfRows == pBlock->numOfRows && keyFile[0] == pBlock->keyFirst && keyFile[pBlock->numOfRows-1] == pBlock->keyLast);
 
   int32_t step = ASCENDING_TRAVERSE(pQueryHandle->order)? 1:-1;
   int32_t numOfCols = (int32_t)(QH_GET_NUM_OF_COLS(pQueryHandle));
 
   STable* pTable = pCheckInfo->pTableObj;
   int32_t endPos = getEndPosInDataBlock(pQueryHandle, &blockInfo);
+  
 
   tsdbDebug("%p uid:%" PRIu64",tid:%d start merge data block, file block range:%"PRIu64"-%"PRIu64" rows:%d, start:%d,"
             "end:%d, 0x%"PRIx64,
@@ -1921,6 +1900,7 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
   STSchema* pSchema1 = NULL;
   STSchema* pSchema2 = NULL;
 
+  // position in file ->fpos
   int32_t pos = cur->pos;
   cur->win = TSWINDOW_INITIALIZER;
 
@@ -1937,50 +1917,56 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
         break;
       }
 
-      TSKEY key = memRowKey(row1);
-      if ((key > pQueryHandle->window.ekey && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
-          (key < pQueryHandle->window.ekey && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
+      TSKEY keyMem = memRowKey(row1);
+      if ((keyMem > pQueryHandle->window.ekey && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
+          (keyMem < pQueryHandle->window.ekey && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
         break;
       }
 
-      if (((pos > endPos || tsArray[pos] > pQueryHandle->window.ekey) && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
-          ((pos < endPos || tsArray[pos] < pQueryHandle->window.ekey) && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
-        break;
+      // break if pos not in this block endPos range. note old code when pos is -1 can crash.
+      if(ASCENDING_TRAVERSE(pQueryHandle->order)) { //ASC
+        if(pos > endPos || keyFile[pos] > pQueryHandle->window.ekey)
+          break;
+      } else { //DESC
+        if(pos < endPos || keyFile[pos] < pQueryHandle->window.ekey)
+          break;
       }
 
-      if ((key < tsArray[pos] && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
-          (key > tsArray[pos] && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
+      if ((keyMem < keyFile[pos] && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
+          (keyMem > keyFile[pos] && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
         if (rv1 != memRowVersion(row1)) {
-          pSchema1 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row1));
+          pSchema1 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row1), (int8_t)memRowType(row1));
           rv1 = memRowVersion(row1);
         }
         if(row2 && rv2 != memRowVersion(row2)) {
-          pSchema2 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row2));
+          pSchema2 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row2), (int8_t)memRowType(row2));
           rv2 = memRowVersion(row2);
         }
         
         mergeTwoRowFromMem(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, row1, row2, numOfCols, pTable, pSchema1, pSchema2, true);
         numOfRows += 1;
+        // record start key with memory key if not
         if (cur->win.skey == TSKEY_INITIAL_VAL) {
-          cur->win.skey = key;
+          cur->win.skey = keyMem;
         }
 
-        cur->win.ekey = key;
-        cur->lastKey  = key + step;
+        cur->win.ekey = keyMem;
+        cur->lastKey  = keyMem + step;
         cur->mixBlock = true;
 
         moveToNextRowInMem(pCheckInfo);
-      } else if (key == tsArray[pos]) {  // data in buffer has the same timestamp of data in file block, ignore it
+      // same  select mem key if update is true
+      } else if (keyMem == keyFile[pos]) {
         if (pCfg->update) {
           if(pCfg->update == TD_ROW_PARTIAL_UPDATE) {
             doCopyRowsFromFileBlock(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, pos, pos);
           }
           if (rv1 != memRowVersion(row1)) {
-            pSchema1 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row1));
+            pSchema1 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row1), (int8_t)memRowType(row1));
             rv1 = memRowVersion(row1);
           }
           if(row2 && rv2 != memRowVersion(row2)) {
-            pSchema2 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row2));
+            pSchema2 = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row2), (int8_t)memRowType(row2));
             rv2 = memRowVersion(row2);
           }
           
@@ -1988,31 +1974,36 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
           mergeTwoRowFromMem(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, row1, row2, numOfCols, pTable, pSchema1, pSchema2, forceSetNull);
           numOfRows += 1;
           if (cur->win.skey == TSKEY_INITIAL_VAL) {
-            cur->win.skey = key;
+            cur->win.skey = keyMem;
           }
 
-          cur->win.ekey = key;
-          cur->lastKey = key + step;
+          cur->win.ekey = keyMem;
+          cur->lastKey  = keyMem + step;
           cur->mixBlock = true;
-
+          
+          //mem move next
           moveToNextRowInMem(pCheckInfo);
+          //file move next, discard file row
           pos += step;
         } else {
+          // not update, only mem move to next, discard mem row
           moveToNextRowInMem(pCheckInfo);
         }
-      } else if ((key > tsArray[pos] && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
-                  (key < tsArray[pos] && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
+      // put file row
+      } else if ((keyMem > keyFile[pos] && ASCENDING_TRAVERSE(pQueryHandle->order)) ||
+                 (keyMem < keyFile[pos] && !ASCENDING_TRAVERSE(pQueryHandle->order))) {
         if (cur->win.skey == TSKEY_INITIAL_VAL) {
-          cur->win.skey = tsArray[pos];
+          cur->win.skey = keyFile[pos];
         }
 
-        int32_t end = doBinarySearchKey(pCols->cols[0].pData, pCols->numOfRows, key, order);
+        int32_t end = doBinarySearchKey(pCols->cols[0].pData, pCols->numOfRows, pos, keyMem, pQueryHandle->order);
         assert(end != -1);
 
-        if (tsArray[end] == key) { // the value of key in cache equals to the end timestamp value, ignore it
+        if (keyFile[end] == keyMem) { // the value of key in cache equals to the end timestamp value, ignore it
           if (pCfg->update == TD_ROW_DISCARD_UPDATE) {
             moveToNextRowInMem(pCheckInfo);
           } else {
+            // can update, don't copy then deal on next loop with keyMem == keyFile[pos]
             end -= step;
           }
         }
@@ -2020,10 +2011,17 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
         int32_t qstart = 0, qend = 0;
         getQualifiedRowsPos(pQueryHandle, pos, end, numOfRows, &qstart, &qend);
 
-        numOfRows = doCopyRowsFromFileBlock(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, qstart, qend);
-        pos += (qend - qstart + 1) * step;
-
-        cur->win.ekey = ASCENDING_TRAVERSE(pQueryHandle->order)? tsArray[qend]:tsArray[qstart];
+        if(qend >= qstart) {
+          // copy qend - qstart + 1 rows from file
+          numOfRows = doCopyRowsFromFileBlock(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, qstart, qend);
+          int32_t num = qend - qstart + 1;
+          pos += num * step;
+        } else {
+          // nothing copy from file
+          pos += step;
+        }
+        
+        cur->win.ekey = ASCENDING_TRAVERSE(pQueryHandle->order)? keyFile[qend] : keyFile[qstart];
         cur->lastKey  = cur->win.ekey + step;
       }
     } while (numOfRows < pQueryHandle->outputCapacity);
@@ -2040,7 +2038,7 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
            !ASCENDING_TRAVERSE(pQueryHandle->order))) {
         // no data in cache or data in cache is greater than the ekey of time window, load data from file block
         if (cur->win.skey == TSKEY_INITIAL_VAL) {
-          cur->win.skey = tsArray[pos];
+          cur->win.skey = keyFile[pos];
         }
 
         int32_t start = -1, end = -1;
@@ -2049,7 +2047,7 @@ static void doMergeTwoLevelData(STsdbQueryHandle* pQueryHandle, STableCheckInfo*
         numOfRows = doCopyRowsFromFileBlock(pQueryHandle, pQueryHandle->outputCapacity, numOfRows, start, end);
         pos += (end - start + 1) * step;
 
-        cur->win.ekey = ASCENDING_TRAVERSE(pQueryHandle->order)? tsArray[end]:tsArray[start];
+        cur->win.ekey = ASCENDING_TRAVERSE(pQueryHandle->order)? keyFile[end] : keyFile[start];
         cur->lastKey  = cur->win.ekey + step;
         cur->mixBlock = true;
       }
@@ -2218,7 +2216,7 @@ static int32_t createDataBlocksInfo(STsdbQueryHandle* pQueryHandle, int32_t numO
     SBlock* pBlock = pTableCheck->pCompInfo->blocks;
     sup.numOfBlocksPerTable[numOfQualTables] = pTableCheck->numOfBlocks;
 
-    char* buf = calloc(1, sizeof(STableBlockInfo) * pTableCheck->numOfBlocks);
+    char* buf = malloc(sizeof(STableBlockInfo) * pTableCheck->numOfBlocks);
     if (buf == NULL) {
       cleanBlockOrderSupporter(&sup, numOfQualTables);
       return TSDB_CODE_TDB_OUT_OF_MEMORY;
@@ -2460,7 +2458,7 @@ int32_t tsdbGetFileBlocksDistInfo(TsdbQueryHandleT* queryHandle, STableBlockDist
 
     // current file are not overlapped with query time window, ignore remain files
     if ((ASCENDING_TRAVERSE(pQueryHandle->order) && win.skey > pQueryHandle->window.ekey) ||
-        (!ASCENDING_TRAVERSE(pQueryHandle->order) && win.ekey < pQueryHandle->window.ekey)) {
+    (!ASCENDING_TRAVERSE(pQueryHandle->order) && win.ekey < pQueryHandle->window.ekey)) {
       tsdbUnLockFS(REPO_FS(pQueryHandle->pTsdb));
       tsdbDebug("%p remain files are not qualified for qrange:%" PRId64 "-%" PRId64 ", ignore, 0x%"PRIx64, pQueryHandle,
                 pQueryHandle->window.skey, pQueryHandle->window.ekey, pQueryHandle->qId);
@@ -2644,7 +2642,7 @@ static int tsdbReadRowsFromCache(STableCheckInfo* pCheckInfo, TSKEY maxKey, int 
 
     win->ekey = key;
     if (rv != memRowVersion(row)) {
-      pSchema = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row));
+      pSchema = tsdbGetTableSchemaByVersion(pTable, memRowVersion(row), (int8_t)memRowType(row));
       rv = memRowVersion(row);
     }
     mergeTwoRowFromMem(pQueryHandle, maxRowsToRead, numOfRows, row, NULL, numOfCols, pTable, pSchema, NULL, true);
@@ -2676,33 +2674,32 @@ static int tsdbReadRowsFromCache(STableCheckInfo* pCheckInfo, TSKEY maxKey, int 
 }
 
 static int32_t getAllTableList(STable* pSuperTable, SArray* list) {
-  SSkipListIterator* iter = tSkipListCreateIter(pSuperTable->pIndex);
-  while (tSkipListIterNext(iter)) {
-    SSkipListNode* pNode = tSkipListIterGet(iter);
+  STSchema* pTagSchema = tsdbGetTableTagSchema(pSuperTable);
+  if(pTagSchema && pTagSchema->numOfCols == 1 && pTagSchema->columns[0].type == TSDB_DATA_TYPE_JSON){
+    uint32_t key = TSDB_DATA_JSON_NULL;
+    char keyMd5[TSDB_MAX_JSON_KEY_MD5_LEN] = {0};
+    jsonKeyMd5(&key, INT_BYTES, keyMd5);
+    SArray** tablist = (SArray**)taosHashGet(pSuperTable->jsonKeyMap, keyMd5, TSDB_MAX_JSON_KEY_MD5_LEN);
 
-    STable* pTable = (STable*) SL_GET_NODE_DATA((SSkipListNode*) pNode);
+    for (int i = 0; i < taosArrayGetSize(*tablist); ++i) {
+      JsonMapValue* p = taosArrayGet(*tablist, i);
+      STableKeyInfo info = {.pTable = p->table, .lastKey = TSKEY_INITIAL_VAL};
+      taosArrayPush(list, &info);
+    }
+  }else{
+    SSkipListIterator* iter = tSkipListCreateIter(pSuperTable->pIndex);
+    while (tSkipListIterNext(iter)) {
+      SSkipListNode* pNode = tSkipListIterGet(iter);
 
-    STableKeyInfo info = {.pTable = pTable, .lastKey = TSKEY_INITIAL_VAL};
-    taosArrayPush(list, &info);
+      STable* pTable = (STable*) SL_GET_NODE_DATA((SSkipListNode*) pNode);
+
+      STableKeyInfo info = {.pTable = pTable, .lastKey = TSKEY_INITIAL_VAL};
+      taosArrayPush(list, &info);
+    }
+
+    tSkipListDestroyIter(iter);
   }
-
-  tSkipListDestroyIter(iter);
   return TSDB_CODE_SUCCESS;
-}
-
-static void destroyHelper(void* param) {
-  if (param == NULL) {
-    return;
-  }
-
-  tQueryInfo* pInfo = (tQueryInfo*)param;
-  if (pInfo->optr != TSDB_RELATION_IN) {
-    tfree(pInfo->q);
-  } else {
-    taosHashCleanup((SHashObj *)(pInfo->q));
-  }
-
-  free(param);
 }
 
 static bool  loadBlockOfActiveTable(STsdbQueryHandle* pQueryHandle) {
@@ -2818,6 +2815,9 @@ static bool loadCachedLast(STsdbQueryHandle* pQueryHandle) {
     }
     
     int32_t i = 0, j = 0;
+
+    // lock pTable->lastCols[i] as it would be released when schema update(tsdbUpdateLastColSchema)
+    TSDB_RLOCK_TABLE(pTable);
     while(i < tgNumOfCols && j < numOfCols) {
       pColInfo = taosArrayGet(pQueryHandle->pColumns, i);
       if (pTable->lastCols[j].colId < pColInfo->info.colId) {
@@ -2904,6 +2904,7 @@ static bool loadCachedLast(STsdbQueryHandle* pQueryHandle) {
       i++;
       j++;
     }
+    TSDB_RUNLOCK_TABLE(pTable);
 
     // leave the real ts column as the last row, because last function only (not stable) use the last row as res
     if (priKey != TSKEY_INITIAL_VAL) {
@@ -2943,6 +2944,22 @@ static bool loadCachedLast(STsdbQueryHandle* pQueryHandle) {
   return false;
 }
 
+void tsdbSwitchTable(TsdbQueryHandleT queryHandle) {
+  STsdbQueryHandle* pQueryHandle = (STsdbQueryHandle*) queryHandle;
+
+  STableCheckInfo* pCheckInfo = taosArrayGet(pQueryHandle->pTableCheckInfo, pQueryHandle->activeIndex);
+  pCheckInfo->numOfBlocks = 0;
+  
+  pQueryHandle->locateStart = false;
+  pQueryHandle->checkFiles  = true;
+  pQueryHandle->cur.rows    = 0;
+  pQueryHandle->currentLoadExternalRows = pQueryHandle->loadExternalRow;
+  
+  terrno = TSDB_CODE_SUCCESS;
+
+  ++pQueryHandle->activeIndex;
+}
+
 
 static bool loadDataBlockFromTableSeq(STsdbQueryHandle* pQueryHandle) {
   size_t numOfTables = taosArrayGetSize(pQueryHandle->pTableCheckInfo);
@@ -2976,6 +2993,9 @@ static bool loadDataBlockFromTableSeq(STsdbQueryHandle* pQueryHandle) {
 // handle data in cache situation
 bool tsdbNextDataBlock(TsdbQueryHandleT pHandle) {
   STsdbQueryHandle* pQueryHandle = (STsdbQueryHandle*) pHandle;
+  if (pQueryHandle == NULL) {
+    return false;
+  }
 
   if (emptyQueryTimewindow(pQueryHandle)) {
     tsdbDebug("%p query window not overlaps with the data set, no result returned, 0x%"PRIx64, pQueryHandle, pQueryHandle->qId);
@@ -3095,6 +3115,9 @@ static int32_t doGetExternalRow(STsdbQueryHandle* pQueryHandle, int16_t type, SM
 
   pSecQueryHandle = tsdbQueryTablesImpl(pQueryHandle->pTsdb, &cond, pQueryHandle->qId, pMemRef);
   tfree(cond.colList);
+  if (pSecQueryHandle == NULL) {
+    goto out_of_memory;
+  }
 
   // current table, only one table
   STableCheckInfo* pCurrent = taosArrayGet(pQueryHandle->pTableCheckInfo, pQueryHandle->activeIndex);
@@ -3102,7 +3125,7 @@ static int32_t doGetExternalRow(STsdbQueryHandle* pQueryHandle, int16_t type, SM
   SArray* psTable = NULL;
   pSecQueryHandle->pTableCheckInfo = createCheckInfoFromCheckInfo(pCurrent, pSecQueryHandle->window.skey, &psTable);
   if (pSecQueryHandle->pTableCheckInfo == NULL) {
-    taosArrayDestroy(psTable);
+    taosArrayDestroy(&psTable);
     terrno = TSDB_CODE_QRY_OUT_OF_MEMORY;
     goto out_of_memory;
   }
@@ -3235,7 +3258,9 @@ int32_t checkForCachedLast(STsdbQueryHandle* pQueryHandle) {
 
   int32_t code = 0;
   
-  if (pQueryHandle->pTsdb && atomic_load_8(&pQueryHandle->pTsdb->hasCachedLastColumn)){
+  STsdbRepo* pRepo = pQueryHandle->pTsdb;
+
+  if (pRepo && CACHE_LAST_NULL_COLUMN(&(pRepo->config))) {
     pQueryHandle->cachelastrow = TSDB_CACHED_TYPE_LAST;
   }
 
@@ -3306,7 +3331,7 @@ STimeWindow updateLastrowForEachGroup(STableGroupInfo *groupList) {
         taosArrayPush(pGroup, &keyInfo);
       }
     } else {  // mark all the empty groups, and remove it later
-      taosArrayDestroy(pGroup);
+      taosArrayDestroy(&pGroup);
       taosArrayPush(emptyGroup, &j);
     }
   }
@@ -3318,7 +3343,7 @@ STimeWindow updateLastrowForEachGroup(STableGroupInfo *groupList) {
   }
 
   taosArrayRemoveBatch(groupList->pGroupList, TARRAY_GET_START(emptyGroup), (int32_t) taosArrayGetSize(emptyGroup));
-  taosArrayDestroy(emptyGroup);
+  taosArrayDestroy(&emptyGroup);
 
   groupList->numOfTables = totalNumOfTable;
   return window;
@@ -3367,8 +3392,12 @@ int32_t tsdbRetrieveDataBlockStatisInfo(TsdbQueryHandleT* pQueryHandle, SDataSta
   }
 
   int64_t stime = taosGetTimestampUs();
-  if (tsdbLoadBlockStatis(&pHandle->rhelper, pBlockInfo->compBlock) < 0) {
+  int     statisStatus = tsdbLoadBlockStatis(&pHandle->rhelper, pBlockInfo->compBlock);
+  if (statisStatus < TSDB_STATIS_OK) {
     return terrno;
+  } else if (statisStatus > TSDB_STATIS_OK) {
+    *pBlockStatis = NULL;
+    return TSDB_CODE_SUCCESS;
   }
 
   int16_t* colIds = pHandle->defaultLoadColumn->pData;
@@ -3379,7 +3408,7 @@ int32_t tsdbRetrieveDataBlockStatisInfo(TsdbQueryHandleT* pQueryHandle, SDataSta
     pHandle->statis[i].colId = colIds[i];
   }
 
-  tsdbGetBlockStatis(&pHandle->rhelper, pHandle->statis, (int)numOfCols);
+  tsdbGetBlockStatis(&pHandle->rhelper, pHandle->statis, (int)numOfCols, pBlockInfo->compBlock);
 
   // always load the first primary timestamp column data
   SDataStatis* pPrimaryColStatis = &pHandle->statis[0];
@@ -3474,23 +3503,29 @@ void filterPrepare(void* expr, void* param) {
 
   if (pInfo->optr == TSDB_RELATION_IN) {
      int dummy = -1;
-     SHashObj *pObj = NULL; 
+     SHashObj *pObj = NULL;
      if (pInfo->sch.colId == TSDB_TBNAME_COLUMN_INDEX) {
-        pObj = taosHashInit(256, taosGetDefaultHashFunction(pInfo->sch.type), true, false);
         SArray *arr = (SArray *)(pCond->arr);
-        for (size_t i = 0; i < taosArrayGetSize(arr); i++) {
+
+       size_t size = taosArrayGetSize(arr);
+       pObj = taosHashInit(size * 2, taosGetDefaultHashFunction(pInfo->sch.type), true, false);
+
+        for (size_t i = 0; i < size; i++) {
           char* p = taosArrayGetP(arr, i);
-          taosHashPut(pObj, varDataVal(p),varDataLen(p), &dummy, sizeof(dummy));
+          strntolower_s(varDataVal(p), varDataVal(p), varDataLen(p));
+          taosHashPut(pObj, varDataVal(p), varDataLen(p), &dummy, sizeof(dummy));
         }
      } else {
        buildFilterSetFromBinary((void **)&pObj, pCond->pz, pCond->nLen);
      }
-     pInfo->q = (char *)pObj;  
+
+     pInfo->q = (char *)pObj;
   } else if (pCond != NULL) {
     uint32_t size = pCond->nLen * TSDB_NCHAR_SIZE;
     if (size < (uint32_t)pSchema->bytes) {
       size = pSchema->bytes;
     }
+
     // to make sure tonchar does not cause invalid write, since the '\0' needs at least sizeof(wchar_t) space.
     pInfo->q = calloc(1, size + TSDB_NCHAR_SIZE + VARSTR_HEADER_SIZE);
     tVariantDump(pCond, pInfo->q, pSchema->type, true);
@@ -3523,8 +3558,13 @@ static int32_t tableGroupComparFn(const void *p1, const void *p2, const void *pa
         STColumn* pCol = schemaColAt(pTableGroupSupp->pTagSchema, colIndex);
         bytes = pCol->bytes;
         type = pCol->type;
-        f1 = tdGetKVRowValOfCol(pTable1->tagVal, pCol->colId);
-        f2 = tdGetKVRowValOfCol(pTable2->tagVal, pCol->colId);
+        if (type == TSDB_DATA_TYPE_JSON){
+          f1 = getJsonTagValueElment(pTable1, pColIndex->name, (int32_t)strlen(pColIndex->name), NULL, TSDB_MAX_JSON_TAGS_LEN);
+          f2 = getJsonTagValueElment(pTable2, pColIndex->name, (int32_t)strlen(pColIndex->name), NULL, TSDB_MAX_JSON_TAGS_LEN);
+        }else{
+          f1 = tdGetKVRowValOfCol(pTable1->tagVal, pCol->colId);
+          f2 = tdGetKVRowValOfCol(pTable2->tagVal, pCol->colId);
+        }
       } 
     }
 
@@ -3611,14 +3651,12 @@ SArray* createTableGroup(SArray* pTableList, STSchema* pTagSchema, SColIndex* pC
   if (numOfOrderCols == 0 || size == 1) { // no group by tags clause or only one table
     SArray* sa = taosArrayInit(size, sizeof(STableKeyInfo));
     if (sa == NULL) {
-      taosArrayDestroy(pTableGroup);
+      taosArrayDestroy(&pTableGroup);
       return NULL;
     }
 
     for(int32_t i = 0; i < size; ++i) {
       STableKeyInfo *pKeyInfo = taosArrayGet(pTableList, i);
-      assert(((STable*)pKeyInfo->pTable)->type == TSDB_CHILD_TABLE);
-
       tsdbRefTable(pKeyInfo->pTable);
 
       STableKeyInfo info = {.pTable = pKeyInfo->pTable, .lastKey = skey};
@@ -3640,103 +3678,9 @@ SArray* createTableGroup(SArray* pTableList, STSchema* pTagSchema, SColIndex* pC
   return pTableGroup;
 }
 
-static bool tableFilterFp(const void* pNode, void* param) {
-  tQueryInfo* pInfo = (tQueryInfo*) param;
-
-  STable* pTable = (STable*)(SL_GET_NODE_DATA((SSkipListNode*)pNode));
-
-  char* val = NULL;
-  if (pInfo->sch.colId == TSDB_TBNAME_COLUMN_INDEX) {
-    val = (char*) TABLE_NAME(pTable);
-  } else {
-    val = tdGetKVRowValOfCol(pTable->tagVal, pInfo->sch.colId);
-  }
-
-  if (pInfo->optr == TSDB_RELATION_ISNULL || pInfo->optr == TSDB_RELATION_NOTNULL) {
-    if (pInfo->optr == TSDB_RELATION_ISNULL) {
-      return (val == NULL) || isNull(val, pInfo->sch.type);
-    } else if (pInfo->optr == TSDB_RELATION_NOTNULL) {
-      return (val != NULL) && (!isNull(val, pInfo->sch.type));
-    }
-  } else if (pInfo->optr == TSDB_RELATION_IN) {
-     int type = pInfo->sch.type;
-     if (type == TSDB_DATA_TYPE_BOOL || IS_SIGNED_NUMERIC_TYPE(type) || type == TSDB_DATA_TYPE_TIMESTAMP) {
-       int64_t v;
-       GET_TYPED_DATA(v, int64_t, pInfo->sch.type, val);
-       return NULL != taosHashGet((SHashObj *)pInfo->q, (char *)&v, sizeof(v));     
-     } else if (IS_UNSIGNED_NUMERIC_TYPE(type)) {
-       uint64_t v;
-       GET_TYPED_DATA(v, uint64_t, pInfo->sch.type, val);
-       return NULL != taosHashGet((SHashObj *)pInfo->q, (char *)&v, sizeof(v));     
-     }
-     else if (type == TSDB_DATA_TYPE_DOUBLE || type == TSDB_DATA_TYPE_FLOAT) {
-       double v;
-       GET_TYPED_DATA(v, double, pInfo->sch.type, val);
-       return NULL != taosHashGet((SHashObj *)pInfo->q, (char *)&v, sizeof(v));     
-     } else if (type == TSDB_DATA_TYPE_BINARY || type == TSDB_DATA_TYPE_NCHAR){
-       return NULL != taosHashGet((SHashObj *)pInfo->q, varDataVal(val), varDataLen(val));        
-     }     
-
-  }
-
-  int32_t ret = 0;
-  if (val == NULL) { //the val is possible to be null, so check it out carefully
-    ret = -1; // val is missing in table tags value pairs
-  } else {
-    ret = pInfo->compare(val, pInfo->q);
-  }
-
-  switch (pInfo->optr) {
-    case TSDB_RELATION_EQUAL: {
-      return ret == 0;
-    }
-    case TSDB_RELATION_NOT_EQUAL: {
-      return ret != 0;
-    }
-    case TSDB_RELATION_GREATER_EQUAL: {
-      return ret >= 0;
-    }
-    case TSDB_RELATION_GREATER: {
-      return ret > 0;
-    }
-    case TSDB_RELATION_LESS_EQUAL: {
-      return ret <= 0;
-    }
-    case TSDB_RELATION_LESS: {
-      return ret < 0;
-    }
-    case TSDB_RELATION_LIKE: {
-      return ret == 0;
-    }
-    case TSDB_RELATION_IN: {
-      return ret == 1;
-    }
-
-    default:
-      assert(false);
-  }
-
-  return true;
-}
-
-static void getTableListfromSkipList(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, SExprTraverseSupp *param);
-
-static int32_t doQueryTableList(STable* pSTable, SArray* pRes, tExprNode* pExpr) {
-  // query according to the expression tree
-  SExprTraverseSupp supp = {
-      .nodeFilterFn = (__result_filter_fn_t) tableFilterFp,
-      .setupInfoFn = filterPrepare,
-      .pExtInfo = pSTable->tagSchema,
-      };
-
-  getTableListfromSkipList(pExpr, pSTable->pIndex, pRes, &supp);
-  tExprTreeDestroy(pExpr, destroyHelper);
-  return TSDB_CODE_SUCCESS;
-}
-
 int32_t tsdbQuerySTableByTagCond(STsdbRepo* tsdb, uint64_t uid, TSKEY skey, const char* pTagCond, size_t len,
-                                 int16_t tagNameRelType, const char* tbnameCond, STableGroupInfo* pGroupInfo,
-                                 SColIndex* pColIndex, int32_t numOfCols) {
+                                 STableGroupInfo* pGroupInfo, SColIndex* pColIndex, int32_t numOfCols) {
+  SArray* res = NULL;
   if (tsdbRLockRepoMeta(tsdb) < 0) goto _error;
 
   STable* pTable = tsdbGetTableByUid(tsdbGetMeta(tsdb), uid);
@@ -3758,11 +3702,11 @@ int32_t tsdbQuerySTableByTagCond(STsdbRepo* tsdb, uint64_t uid, TSKEY skey, cons
   }
 
   //NOTE: not add ref count for super table
-  SArray* res = taosArrayInit(8, sizeof(STableKeyInfo));
+  res = taosArrayInit(8, sizeof(STableKeyInfo));
   STSchema* pTagSchema = tsdbGetTableTagSchema(pTable);
 
   // no tags and tbname condition, all child tables of this stable are involved
-  if (tbnameCond == NULL && (pTagCond == NULL || len == 0)) {
+  if (pTagCond == NULL || len == 0) {
     int32_t ret = getAllTableList(pTable, res);
     if (ret != TSDB_CODE_SUCCESS) {
       tsdbUnlockRepoMeta(tsdb);
@@ -3775,7 +3719,7 @@ int32_t tsdbQuerySTableByTagCond(STsdbRepo* tsdb, uint64_t uid, TSKEY skey, cons
     tsdbDebug("%p no table name/tag condition, all tables qualified, numOfTables:%u, group:%zu", tsdb,
               pGroupInfo->numOfTables, taosArrayGetSize(pGroupInfo->pGroupList));
 
-    taosArrayDestroy(res);
+    taosArrayDestroy(&res);
     if (tsdbUnlockRepoMeta(tsdb) < 0) goto _error;
     return ret;
   }
@@ -3784,25 +3728,7 @@ int32_t tsdbQuerySTableByTagCond(STsdbRepo* tsdb, uint64_t uid, TSKEY skey, cons
   tExprNode* expr = NULL;
 
   TRY(TSDB_MAX_TAG_CONDITIONS) {
-    expr = exprTreeFromTableName(tbnameCond);
-    if (expr == NULL) {
-      expr = exprTreeFromBinary(pTagCond, len);
-    } else {
-      CLEANUP_PUSH_VOID_PTR_PTR(true, tExprTreeDestroy, expr, NULL);
-      tExprNode* tagExpr = exprTreeFromBinary(pTagCond, len);
-      if (tagExpr != NULL) {
-        CLEANUP_PUSH_VOID_PTR_PTR(true, tExprTreeDestroy, tagExpr, NULL);
-        tExprNode* tbnameExpr = expr;
-        expr = calloc(1, sizeof(tExprNode));
-        if (expr == NULL) {
-          THROW( TSDB_CODE_TDB_OUT_OF_MEMORY );
-        }
-        expr->nodeType = TSQL_NODE_EXPR;
-        expr->_node.optr = (uint8_t)tagNameRelType;
-        expr->_node.pLeft = tagExpr;
-        expr->_node.pRight = tbnameExpr;
-      }
-    }
+    expr = exprTreeFromBinary(pTagCond, len);
     CLEANUP_EXECUTE();
 
   } CATCH( code ) {
@@ -3814,19 +3740,42 @@ int32_t tsdbQuerySTableByTagCond(STsdbRepo* tsdb, uint64_t uid, TSKEY skey, cons
     // TODO: more error handling
   } END_TRY
 
-  doQueryTableList(pTable, res, expr);
+  void *filterInfo = calloc(1, sizeof(SFilterInfo));
+  ((SFilterInfo*)filterInfo)->pTable = pTable;
+  ret = filterInitFromTree(expr, &filterInfo, 0);
+  tExprTreeDestroy(expr, NULL);
+
+  if (ret != TSDB_CODE_SUCCESS) {
+    terrno = ret;
+    tsdbUnlockRepoMeta(tsdb);
+    filterFreeInfo(filterInfo);
+    goto _error;
+  }
+
+  ret = tsdbQueryTableList(pTable, res, filterInfo);
+  if (ret != TSDB_CODE_SUCCESS) {
+    terrno = ret;
+    tsdbUnlockRepoMeta(tsdb);
+    filterFreeInfo(filterInfo);
+    goto _error;
+  }
+
+  filterFreeInfo(filterInfo);
+
   pGroupInfo->numOfTables = (uint32_t)taosArrayGetSize(res);
   pGroupInfo->pGroupList  = createTableGroup(res, pTagSchema, pColIndex, numOfCols, skey);
 
   tsdbDebug("%p stable tid:%d, uid:%"PRIu64" query, numOfTables:%u, belong to %" PRIzu " groups", tsdb, pTable->tableId.tid,
       pTable->tableId.uid, pGroupInfo->numOfTables, taosArrayGetSize(pGroupInfo->pGroupList));
 
-  taosArrayDestroy(res);
+  taosArrayDestroy(&res);
 
   if (tsdbUnlockRepoMeta(tsdb) < 0) goto _error;
   return ret;
 
   _error:
+
+  taosArrayDestroy(&res);
   return terrno;
 }
 
@@ -3882,7 +3831,7 @@ int32_t tsdbGetTableGroupFromIdList(STsdbRepo* tsdb, SArray* pTableIdList, STabl
       tsdbError("direct query on super tale is not allowed, table uid:%"PRIu64", tid:%d", id->uid, id->tid);
       terrno = TSDB_CODE_QRY_INVALID_MSG;
       tsdbUnlockRepoMeta(tsdb);
-      taosArrayDestroy(group);
+      taosArrayDestroy(&group);
       return terrno;
     }
 
@@ -3893,7 +3842,7 @@ int32_t tsdbGetTableGroupFromIdList(STsdbRepo* tsdb, SArray* pTableIdList, STabl
   }
 
   if (tsdbUnlockRepoMeta(tsdb) < 0) {
-    taosArrayDestroy(group);
+    taosArrayDestroy(&group);
     return terrno;
   }
 
@@ -3901,7 +3850,7 @@ int32_t tsdbGetTableGroupFromIdList(STsdbRepo* tsdb, SArray* pTableIdList, STabl
   if (pGroupInfo->numOfTables > 0) {
     taosArrayPush(pGroupInfo->pGroupList, &group);
   } else {
-    taosArrayDestroy(group);
+    taosArrayDestroy(&group);
   }
 
   return TSDB_CODE_SUCCESS;
@@ -3918,7 +3867,7 @@ static void* doFreeColumnInfoData(SArray* pColumnInfoData) {
     tfree(pColInfo->pData);
   }
 
-  taosArrayDestroy(pColumnInfoData);
+  taosArrayDestroy(&pColumnInfoData);
   return NULL;
 }
 
@@ -3931,7 +3880,7 @@ static void* destroyTableCheckInfo(SArray* pTableCheckInfo) {
     tfree(p->pCompInfo);
   }
 
-  taosArrayDestroy(pTableCheckInfo);
+  taosArrayDestroy(&pTableCheckInfo);
   return NULL;
 }
 
@@ -3943,7 +3892,7 @@ void tsdbCleanupQueryHandle(TsdbQueryHandleT queryHandle) {
 
   pQueryHandle->pColumns = doFreeColumnInfoData(pQueryHandle->pColumns);
 
-  taosArrayDestroy(pQueryHandle->defaultLoadColumn);
+  taosArrayDestroy(&pQueryHandle->defaultLoadColumn);
   tfree(pQueryHandle->pDataBlockInfo);
   tfree(pQueryHandle->statis);
 
@@ -3990,259 +3939,367 @@ void tsdbDestroyTableGroup(STableGroupInfo *pGroupList) {
       //assert(pTable != NULL);
     }
 
-    taosArrayDestroy(p);
+    taosArrayDestroy(&p);
   }
 
   taosHashCleanup(pGroupList->map);
-  taosArrayDestroy(pGroupList->pGroupList);
+  taosArrayDestroy(&pGroupList->pGroupList);
   pGroupList->numOfTables = 0;
 }
 
-static void applyFilterToSkipListNode(SSkipList *pSkipList, tExprNode *pExpr, SArray *pResult, SExprTraverseSupp *param) {
-  SSkipListIterator* iter = tSkipListCreateIter(pSkipList);
 
-  // Scan each node in the skiplist by using iterator
-  while (tSkipListIterNext(iter)) {
-    SSkipListNode *pNode = tSkipListIterGet(iter);
-    if (exprTreeApplyFilter(pExpr, pNode, param)) {
-      taosArrayPush(pResult, &(SL_GET_NODE_DATA(pNode)));
-    }
-  }
+static FORCE_INLINE int32_t tsdbGetTagDataFromId(void *param, int32_t id, void **data) {
+  STable* pTable = (STable*)(SL_GET_NODE_DATA((SSkipListNode *)param));
 
-  tSkipListDestroyIter(iter);
-}
-
-typedef struct {
-  char*    v;
-  int32_t  optr;
-} SEndPoint;
-
-typedef struct {
-  SEndPoint* start;
-  SEndPoint* end;
-} SQueryCond;
-
-// todo check for malloc failure
-static int32_t setQueryCond(tQueryInfo *queryColInfo, SQueryCond* pCond) {
-  int32_t optr = queryColInfo->optr;
-
-  if (optr == TSDB_RELATION_GREATER || optr == TSDB_RELATION_GREATER_EQUAL ||
-      optr == TSDB_RELATION_EQUAL || optr == TSDB_RELATION_NOT_EQUAL) {
-    pCond->start       = calloc(1, sizeof(SEndPoint));
-    pCond->start->optr = queryColInfo->optr;
-    pCond->start->v    = queryColInfo->q;
-  } else if (optr == TSDB_RELATION_LESS || optr == TSDB_RELATION_LESS_EQUAL) {
-    pCond->end       = calloc(1, sizeof(SEndPoint));
-    pCond->end->optr = queryColInfo->optr;
-    pCond->end->v    = queryColInfo->q;
-  } else if (optr == TSDB_RELATION_IN) {
-    pCond->start       = calloc(1, sizeof(SEndPoint));
-    pCond->start->optr = queryColInfo->optr;
-    pCond->start->v    = queryColInfo->q; 
-  } else if (optr == TSDB_RELATION_LIKE) {
-    assert(0);
+  if (id == TSDB_TBNAME_COLUMN_INDEX) {
+    *data = TABLE_NAME(pTable);
+  } else {
+    *data = tdGetKVRowValOfCol(pTable->tagVal, id);
   }
 
   return TSDB_CODE_SUCCESS;
 }
 
-static void queryIndexedColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArray* result) {
+
+
+static void queryIndexedColumn(SSkipList* pSkipList, void* filterInfo, SArray* res) {
   SSkipListIterator* iter = NULL;
+  char *startVal = NULL;
+  int32_t order = 0;
+  int32_t inRange = 0;
+  int32_t flag = 0;
+  bool all = false;
+  int8_t *addToResult = NULL;
 
-  SQueryCond cond = {0};
-  if (setQueryCond(pQueryInfo, &cond) != TSDB_CODE_SUCCESS) {
-    //todo handle error
-  }
+  filterGetIndexedColumnInfo(filterInfo, &startVal, &order, &flag);
 
-  if (cond.start != NULL) {
-    iter = tSkipListCreateIterFromVal(pSkipList, (char*) cond.start->v, pSkipList->type, TSDB_ORDER_ASC);
-  } else {
-    iter = tSkipListCreateIterFromVal(pSkipList, (char*)(cond.end ? cond.end->v: NULL), pSkipList->type, TSDB_ORDER_DESC);
-  }
+  tsdbDebug("filter index column start, order:%d, flag:%d", order, flag);
 
-  if (cond.start != NULL) {
-    int32_t optr = cond.start->optr;
-
-    if (optr == TSDB_RELATION_EQUAL) {   // equals
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-
-        int32_t ret = pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.start->v);
-        if (ret != 0) {
-          break;
-        }
-
-        STableKeyInfo info = {.pTable = (void*)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-        taosArrayPush(result, &info);
-      }
-    } else if (optr == TSDB_RELATION_GREATER || optr == TSDB_RELATION_GREATER_EQUAL) { // greater equal
-      bool comp = true;
-      int32_t ret = 0;
-
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-
-        if (comp) {
-          ret = pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.start->v);
-          assert(ret >= 0);
-        }
-
-        if (ret == 0 && optr == TSDB_RELATION_GREATER) {
-          continue;
-        } else {
-          STableKeyInfo info = {.pTable = (void*)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-          taosArrayPush(result, &info);
-          comp = false;
-        }
-      }
-    } else if (optr == TSDB_RELATION_NOT_EQUAL) {   // not equal
-      bool comp = true;
-
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-        comp = comp && (pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.start->v) == 0);
-        if (comp) {
-          continue;
-        }
-
-        STableKeyInfo info = {.pTable = (void*)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-        taosArrayPush(result, &info);
-      }
-
-      tSkipListDestroyIter(iter);
-
-      comp = true;
-      iter = tSkipListCreateIterFromVal(pSkipList, (char*) cond.start->v, pSkipList->type, TSDB_ORDER_DESC);
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-        comp = comp && (pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.start->v) == 0);
-        if (comp) {
-          continue;
-        }
-
-        STableKeyInfo info = {.pTable = (void*)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-        taosArrayPush(result, &info);
-      }
-
-    } else if (optr == TSDB_RELATION_IN) {
-      while(tSkipListIterNext(iter)) {
-        SSkipListNode* pNode = tSkipListIterGet(iter);
-
-        int32_t ret = pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.start->v);
-        if (ret != 0) {
-          break;
-        }
-
-        STableKeyInfo info = {.pTable = (void*)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-        taosArrayPush(result, &info);
-      }
-      
+  while (order) {
+    if (FILTER_GET_FLAG(order, TSDB_ORDER_ASC)) {
+      iter = tSkipListCreateIterFromVal(pSkipList, startVal, pSkipList->type, TSDB_ORDER_ASC);
+      FILTER_CLR_FLAG(order, TSDB_ORDER_ASC);
     } else {
-      assert(0);
+      iter = tSkipListCreateIterFromVal(pSkipList, startVal, pSkipList->type, TSDB_ORDER_DESC);
+      FILTER_CLR_FLAG(order, TSDB_ORDER_DESC);
     }
-  } else {
-    int32_t optr = cond.end ? cond.end->optr : TSDB_RELATION_INVALID;
-    if (optr == TSDB_RELATION_LESS || optr == TSDB_RELATION_LESS_EQUAL) {
-      bool    comp = true;
-      int32_t ret = 0;
 
-      while (tSkipListIterNext(iter)) {
-        SSkipListNode *pNode = tSkipListIterGet(iter);
+    while (tSkipListIterNext(iter)) {
+      SSkipListNode *pNode = tSkipListIterGet(iter);
 
-        if (comp) {
-          ret = pQueryInfo->compare(SL_GET_NODE_KEY(pSkipList, pNode), cond.end->v);
-          assert(ret <= 0);
-        }
-
-        if (ret == 0 && optr == TSDB_RELATION_LESS) {
-          continue;
-        } else {
-          STableKeyInfo info = {.pTable = (void *)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-          taosArrayPush(result, &info);
-          comp = false;  // no need to compare anymore
-        }
+      if (inRange == 0 || !FILTER_GET_FLAG(flag, FI_ACTION_NO_NEED)) {
+        tsdbDebug("filter index column, filter it");
+        filterSetColFieldData(filterInfo, pNode, tsdbGetTagDataFromId);
+        all = filterExecute(filterInfo, 1, &addToResult, NULL, 0);
       }
-    } else {
-      assert(pQueryInfo->optr == TSDB_RELATION_ISNULL || pQueryInfo->optr == TSDB_RELATION_NOTNULL);
 
-      while (tSkipListIterNext(iter)) {
-        SSkipListNode *pNode = tSkipListIterGet(iter);
+      char *pData = SL_GET_NODE_DATA(pNode);
 
-        bool isnull = isNull(SL_GET_NODE_KEY(pSkipList, pNode), pQueryInfo->sch.type);
-        if ((pQueryInfo->optr == TSDB_RELATION_ISNULL && isnull) ||
-            (pQueryInfo->optr == TSDB_RELATION_NOTNULL && (!isnull))) {
-          STableKeyInfo info = {.pTable = (void *)SL_GET_NODE_DATA(pNode), .lastKey = TSKEY_INITIAL_VAL};
-          taosArrayPush(result, &info);
-        }
+      tsdbDebug("filter index column, table:%s, result:%d", ((STable *)pData)->name->data, all);
+
+      if (all || (addToResult && *addToResult)) {
+        STableKeyInfo info = {.pTable = (void*)pData, .lastKey = TSKEY_INITIAL_VAL};
+        taosArrayPush(res, &info);
+        inRange = 1;
+      } else if (inRange){
+        break;
       }
     }
+
+    inRange = 0;
+
+    tfree(addToResult);
+    tSkipListDestroyIter(iter);
   }
 
-  free(cond.start);
-  free(cond.end);
-  tSkipListDestroyIter(iter);
+  tsdbDebug("filter index column end");
 }
 
-static void queryIndexlessColumn(SSkipList* pSkipList, tQueryInfo* pQueryInfo, SArray* res, __result_filter_fn_t filterFp) {
+static void queryIndexlessColumn(SSkipList* pSkipList, void* filterInfo, SArray* res) {
   SSkipListIterator* iter = tSkipListCreateIter(pSkipList);
+  int8_t *addToResult = NULL;
 
   while (tSkipListIterNext(iter)) {
-    bool addToResult = false;
 
     SSkipListNode *pNode = tSkipListIterGet(iter);
 
+    filterSetColFieldData(filterInfo, pNode, tsdbGetTagDataFromId);
+
     char *pData = SL_GET_NODE_DATA(pNode);
-    tstr *name = (tstr*) tsdbGetTableName((void*) pData);
 
-    // todo speed up by using hash
-    if (pQueryInfo->sch.colId == TSDB_TBNAME_COLUMN_INDEX) {
-      if (pQueryInfo->optr == TSDB_RELATION_IN) {
-        addToResult = pQueryInfo->compare(name, pQueryInfo->q);
-      } else if (pQueryInfo->optr == TSDB_RELATION_LIKE) {
-        addToResult = !pQueryInfo->compare(name, pQueryInfo->q);
-      }
-    } else {
-      addToResult = filterFp(pNode, pQueryInfo);
-    }
+    bool all = filterExecute(filterInfo, 1, &addToResult, NULL, 0);
 
-    if (addToResult) {
+    if (all || (addToResult && *addToResult)) {
       STableKeyInfo info = {.pTable = (void*)pData, .lastKey = TSKEY_INITIAL_VAL};
       taosArrayPush(res, &info);
     }
   }
 
+  tfree(addToResult);
+
   tSkipListDestroyIter(iter);
 }
 
-// Apply the filter expression to each node in the skiplist to acquire the qualified nodes in skip list
-void getTableListfromSkipList(tExprNode *pExpr, SSkipList *pSkipList, SArray *result, SExprTraverseSupp *param) {
-  if (pExpr == NULL) {
-    return;
+static FORCE_INLINE int32_t tsdbGetJsonTagDataFromId(void *param, int32_t id, char* name, void **data) {
+  JsonMapValue* jsonMapV = (JsonMapValue*)(param);
+  STable* pTable = (STable*)(jsonMapV->table);
+
+  if (id == TSDB_TBNAME_COLUMN_INDEX) {
+    *data = TABLE_NAME(pTable);
+  } else {
+    void* jsonData = tsdbGetJsonTagValue(pTable, name, TSDB_MAX_JSON_KEY_MD5_LEN, NULL);
+    // jsonData == NULL for ? operation
+    // if(jsonData != NULL) jsonData += CHAR_BYTES;   // jump type
+    *data = jsonData;
   }
 
-  tExprNode *pLeft  = pExpr->_node.pLeft;
-  tExprNode *pRight = pExpr->_node.pRight;
-
-  // column project
-  if (pLeft->nodeType != TSQL_NODE_EXPR && pRight->nodeType != TSQL_NODE_EXPR) {
-    assert(pLeft->nodeType == TSQL_NODE_COL && (pRight->nodeType == TSQL_NODE_VALUE || pRight->nodeType == TSQL_NODE_DUMMY));
-
-    param->setupInfoFn(pExpr, param->pExtInfo);
-
-    tQueryInfo *pQueryInfo = pExpr->_node.info;
-    if (pQueryInfo->indexed && (pQueryInfo->optr != TSDB_RELATION_LIKE && pQueryInfo->optr != TSDB_RELATION_IN)) {
-      queryIndexedColumn(pSkipList, pQueryInfo, result);
-    } else {
-      queryIndexlessColumn(pSkipList, pQueryInfo, result, param->nodeFilterFn);
-    }
-
-    return;
-  }
-
-  // The value of hasPK is always 0.
-  uint8_t weight = pLeft->_node.hasPK + pRight->_node.hasPK;
-  assert(weight == 0 && pSkipList != NULL && taosArrayGetSize(result) == 0);
-
-  //apply the hierarchical filter expression to every node in skiplist to find the qualified nodes
-  applyFilterToSkipListNode(pSkipList, pExpr, result, param);
+  return TSDB_CODE_SUCCESS;
 }
+
+static int32_t queryByJsonTag(STable* pTable, void* filterInfo, SArray* res){
+  // get all table in fields, and dumplicate it
+  SArray* tabList = NULL;
+  bool needQueryAll = false;
+  SFilterInfo* info = (SFilterInfo*)filterInfo;
+  for (uint16_t i = 0; i < info->fields[FLD_TYPE_COLUMN].num; ++i) {
+    SFilterField* fi = &info->fields[FLD_TYPE_COLUMN].fields[i];
+    SSchema*      sch = fi->desc;
+    if (sch->colId == TSDB_TBNAME_COLUMN_INDEX) {
+      tabList = taosArrayInit(32, sizeof(JsonMapValue));
+      getAllTableList(pTable, tabList);   // query all table
+      needQueryAll = true;
+      break;
+    }
+  }
+  for (uint16_t i = 0; i < info->unitNum; ++i) {  // is null operation need query all table
+    SFilterUnit* unit = &info->units[i];
+    if (unit->compare.optr == TSDB_RELATION_ISNULL) {
+      tabList = taosArrayInit(32, sizeof(JsonMapValue));
+      getAllTableList(pTable, tabList);   // query all table
+      needQueryAll = true;
+      break;
+    }
+  }
+
+  for (uint16_t i = 0; i < info->fields[FLD_TYPE_COLUMN].num; ++i) {
+    if (needQueryAll) break;    // query all table
+    SFilterField* fi = &info->fields[FLD_TYPE_COLUMN].fields[i];
+    SSchema*      sch = fi->desc;
+    char* key = sch->name;
+
+    SArray** data = (SArray**)taosHashGet(pTable->jsonKeyMap, key, TSDB_MAX_JSON_KEY_MD5_LEN);
+    if(data == NULL) continue;
+    if(tabList == NULL) {
+      tabList = taosArrayDup(*data);
+    }else{
+      for(int j = 0; j < taosArrayGetSize(*data); j++){
+        void* element = taosArrayGet(*data, j);
+        void* p = taosArraySearch(tabList, element, tsdbCompareJsonMapValue, TD_EQ);
+        if (p == NULL) {
+          p = taosArraySearch(tabList, element, tsdbCompareJsonMapValue, TD_GE);
+          if(p == NULL){
+            taosArrayPush(tabList, element);
+          }else{
+            taosArrayInsert(tabList, TARRAY_ELEM_IDX(tabList, p), element);
+          }
+        }
+      }
+    }
+  }
+  if(tabList == NULL){
+    tsdbError("json key not exist, no candidate table");
+    return TSDB_CODE_SUCCESS;
+  }
+  size_t size = taosArrayGetSize(tabList);
+  int8_t *addToResult = NULL;
+  for(int i = 0; i < size; i++){
+    JsonMapValue* data = taosArrayGet(tabList, i);
+    filterSetJsonColFieldData(filterInfo, data, tsdbGetJsonTagDataFromId);
+    bool all = filterExecute(filterInfo, 1, &addToResult, NULL, 0);
+
+    if (all || (addToResult && *addToResult)) {
+      STableKeyInfo kInfo = {.pTable = (void*)(data->table), .lastKey = TSKEY_INITIAL_VAL};
+      taosArrayPush(res, &kInfo);
+    }
+  }
+  tfree(addToResult);
+  taosArrayDestroy(&tabList);
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t tsdbQueryTableList(STable* pTable, SArray* pRes, void* filterInfo) {
+  STSchema*   pTSSchema = pTable->tagSchema;
+
+  if(pTSSchema->columns->type == TSDB_DATA_TYPE_JSON){
+    return queryByJsonTag(pTable, filterInfo, pRes);
+  }else{
+    bool indexQuery = false;
+    SSkipList *pSkipList = pTable->pIndex;
+
+    filterIsIndexedColumnQuery(filterInfo, pTSSchema->columns->colId, &indexQuery);
+
+    if (indexQuery) {
+      queryIndexedColumn(pSkipList, filterInfo, pRes);
+    } else {
+      queryIndexlessColumn(pSkipList, filterInfo, pRes);
+    }
+  }
+
+  return TSDB_CODE_SUCCESS;
+}
+
+void* getJsonTagValueElment(void* data, char* key, int32_t keyLen, char* dst, int16_t bytes){
+  char keyMd5[TSDB_MAX_JSON_KEY_MD5_LEN] = {0};
+  jsonKeyMd5(key, keyLen, keyMd5);
+
+  void* result = tsdbGetJsonTagValue(data, keyMd5, TSDB_MAX_JSON_KEY_MD5_LEN, NULL);
+  if (result == NULL){    // json key no result
+    if(!dst) return NULL;
+    *dst = TSDB_DATA_TYPE_JSON;
+    setNull(dst + CHAR_BYTES, TSDB_DATA_TYPE_JSON, 0);
+    return dst;
+  }
+
+  char* realData = POINTER_SHIFT(result, CHAR_BYTES);
+  if(*(char*)result == TSDB_DATA_TYPE_NCHAR || *(char*)result == TSDB_DATA_TYPE_BINARY) {
+    assert(varDataTLen(realData) < bytes);
+    if(!dst) return result;
+    memcpy(dst, result, CHAR_BYTES + varDataTLen(realData));
+    return dst;
+  }else if (*(char*)result == TSDB_DATA_TYPE_DOUBLE || *(char*)result == TSDB_DATA_TYPE_BIGINT) {
+    if(!dst) return result;
+    memcpy(dst, result, CHAR_BYTES + LONG_BYTES);
+    return dst;
+  }else if (*(char*)result == TSDB_DATA_TYPE_BOOL) {
+    if(!dst) return result;
+    memcpy(dst, result, CHAR_BYTES + CHAR_BYTES);
+    return dst;
+  }else {
+    assert(0);
+  }
+  return result;
+}
+
+void getJsonTagValueAll(void* data, void* dst, int16_t bytes) {
+  char* json = parseTagDatatoJson(data);
+  char* tagData = POINTER_SHIFT(dst, CHAR_BYTES);
+  *(char*)dst = TSDB_DATA_TYPE_JSON;
+  if(json == NULL){
+    setNull(tagData, TSDB_DATA_TYPE_JSON, 0);
+    return;
+  }
+
+  int32_t length = 0;
+  if(!taosMbsToUcs4(json, strlen(json), varDataVal(tagData), bytes - VARSTR_HEADER_SIZE - CHAR_BYTES, &length)){
+    tsdbError("getJsonTagValueAll mbstoucs4 error! length:%d", length);
+  }
+  varDataSetLen(tagData, length);
+  assert(varDataTLen(tagData) <= bytes);
+  tfree(json);
+}
+
+char* parseTagDatatoJson(void *p){
+  char* string = NULL;
+  cJSON *json = cJSON_CreateObject();
+  if (json == NULL)
+  {
+    goto end;
+  }
+
+  int16_t nCols = kvRowNCols(p);
+  ASSERT(nCols%2 == 1);
+  char tagJsonKey[TSDB_MAX_JSON_KEY_LEN + 1] = {0};
+  for (int j = 0; j < nCols; ++j) {
+    SColIdx * pColIdx = kvRowColIdxAt(p, j);
+    void* val = (kvRowColVal(p, pColIdx));
+    if (j == 0){
+      int8_t jsonPlaceHolder = *(int8_t*)val;
+      ASSERT(jsonPlaceHolder == TSDB_DATA_JSON_PLACEHOLDER);
+      continue;
+    }
+    if(j == 1){
+      uint32_t jsonNULL = *(uint32_t*)(varDataVal(val));
+      ASSERT(jsonNULL == TSDB_DATA_JSON_NULL);
+      continue;
+    }
+    if (j == 2){
+      if(*(uint32_t*)(varDataVal(val + CHAR_BYTES)) == TSDB_DATA_JSON_NULL) goto end;
+      continue;
+    }
+    if (j%2 == 1) { // json key  encode by binary
+      ASSERT(varDataLen(val) <= TSDB_MAX_JSON_KEY_LEN);
+      memset(tagJsonKey, 0, sizeof(tagJsonKey));
+      memcpy(tagJsonKey, varDataVal(val), varDataLen(val));
+    }else{  // json value
+      char* realData = POINTER_SHIFT(val, CHAR_BYTES);
+      char type = *(char*)val;
+      if(type == TSDB_DATA_TYPE_BINARY) {
+        assert(*(uint32_t*)varDataVal(realData) == TSDB_DATA_JSON_null);   // json null value
+        assert(varDataLen(realData) == INT_BYTES);
+        cJSON* value = cJSON_CreateNull();
+        if (value == NULL)
+        {
+          goto end;
+        }
+        cJSON_AddItemToObject(json, tagJsonKey, value);
+      }else if(type == TSDB_DATA_TYPE_NCHAR) {
+        cJSON* value = NULL;
+        if (varDataLen(realData) > 0){
+          char *tagJsonValue = calloc(varDataLen(realData), 1);
+          int32_t length = taosUcs4ToMbs(varDataVal(realData), varDataLen(realData), tagJsonValue);
+          if (length < 0) {
+            tsdbError("charset:%s to %s. val:%s convert json value failed.", DEFAULT_UNICODE_ENCODEC, tsCharset,
+                      (char*)val);
+            free(tagJsonValue);
+            goto end;
+          }
+          value = cJSON_CreateString(tagJsonValue);
+          free(tagJsonValue);
+          if (value == NULL)
+          {
+            goto end;
+          }
+        }else if(varDataLen(realData) == 0){
+          value = cJSON_CreateString("");
+        }else{
+          assert(0);
+        }
+
+        cJSON_AddItemToObject(json, tagJsonKey, value);
+      }else if(type == TSDB_DATA_TYPE_DOUBLE){
+        double jsonVd = *(double*)(realData);
+        cJSON* value = cJSON_CreateNumber(jsonVd);
+        if (value == NULL)
+        {
+          goto end;
+        }
+        cJSON_AddItemToObject(json, tagJsonKey, value);
+      }else if(type == TSDB_DATA_TYPE_BIGINT){
+        int64_t jsonVd = *(int64_t*)(realData);
+        cJSON* value = cJSON_CreateNumber((double)jsonVd);
+        if (value == NULL)
+        {
+          goto end;
+        }
+        cJSON_AddItemToObject(json, tagJsonKey, value);
+      }else if (type == TSDB_DATA_TYPE_BOOL) {
+        char jsonVd = *(char*)(realData);
+        cJSON* value = cJSON_CreateBool(jsonVd);
+        if (value == NULL)
+        {
+          goto end;
+        }
+        cJSON_AddItemToObject(json, tagJsonKey, value);
+      }
+      else{
+        tsdbError("unsupportted json value");
+      }
+    }
+  }
+  string = cJSON_PrintUnformatted(json);
+end:
+  cJSON_Delete(json);
+  return string;
+}
+
+

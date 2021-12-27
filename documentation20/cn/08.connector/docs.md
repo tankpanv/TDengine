@@ -2,7 +2,7 @@
 
 TDengine提供了丰富的应用程序开发接口，其中包括C/C++、Java、Python、Go、Node.js、C# 、RESTful 等，便于用户快速开发应用。
 
-![image-connecotr](page://images/connector.png)
+![image-connecotr](../images/connector.png)
 
 目前TDengine的连接器可支持的平台广泛，包括：X64/X86/ARM64/ARM32/MIPS/Alpha等硬件平台，以及Linux/Win64/Win32等开发环境。对照矩阵如下：
 
@@ -17,7 +17,7 @@ TDengine提供了丰富的应用程序开发接口，其中包括C/C++、Java、
 | **C#**      | ●               | ●               | ○               | ○               | ○         | ○         | ○               | --               | --             |
 | **RESTful** | ●               | ●               | ●               | ●               | ●         | ●         | ○               | ○                | ○              |
 
-其中 ● 表示经过官方测试验证， ○ 表示非官方测试验证。
+其中 ● 表示官方测试验证通过，○ 表示非官方测试验证通过，-- 表示未经验证。
 
 注意：
 
@@ -55,7 +55,7 @@ TDengine提供了丰富的应用程序开发接口，其中包括C/C++、Java、
 ​    *install_client.sh*：安装脚本，用于应用驱动程序
 ​    *taos.tar.gz*：应用驱动安装包
 ​    *driver*：TDengine应用驱动driver
-​    *connector*: 各种编程语言连接器（go/grafanaplugin/nodejs/python/JDBC）
+​    *connector*: 各种编程语言连接器（go/nodejs/python/JDBC）
 ​    *examples*: 各种编程语言的示例程序(c/C#/go/JDBC/MATLAB/python/R)
 
 运行install_client.sh进行安装。
@@ -64,7 +64,9 @@ TDengine提供了丰富的应用程序开发接口，其中包括C/C++、Java、
 
 编辑taos.cfg文件(默认路径/etc/taos/taos.cfg)，将firstEP修改为TDengine服务器的End Point，例如：h1.taos.com:6030
 
-**提示： 如本机没有部署TDengine服务，仅安装了应用驱动，则taos.cfg中仅需配置firstEP，无需配置FQDN。**
+**提示：**
+1. **如本机没有部署TDengine服务，仅安装了应用驱动，则taos.cfg中仅需配置firstEP，无需配置FQDN。**
+2. **为防止与服务器端连接时出现“unable to resolve FQDN”错误，建议确认客户端的hosts文件已经配置正确的FQDN值。**
 
 **Windows x64/x86**
 
@@ -96,7 +98,7 @@ TDengine提供了丰富的应用程序开发接口，其中包括C/C++、Java、
 **提示：** 
 
 1. **如利用FQDN连接服务器，必须确认本机网络环境DNS已配置好，或在hosts文件中添加FQDN寻址记录，如编辑C:\Windows\system32\drivers\etc\hosts，添加如下的记录：`192.168.1.99  h1.taos.com` **
-2．**卸载：运行unins000.exe可卸载TDengine应用驱动。**
+2. **卸载：运行unins000.exe可卸载TDengine应用驱动。**
 
 ### 安装验证
 
@@ -143,7 +145,7 @@ taos>
 | **CPU类型**  | x64（64bit） |          |          | ARM64    | ARM32      |
 | ------------ | ------------ | -------- | -------- | -------- | ---------- |
 | **OS类型**   | Linux        | Win64    | Win32    | Linux    | Linux      |
-| **支持与否** | **支持**     | **支持** | **支持** | **支持** | **开发中** |
+| **支持与否** | **支持**     | **支持** | **支持** | **支持** | **支持** |
 
 C/C++的API类似于MySQL的C API。应用程序使用时，需要包含TDengine头文件 *taos.h*，里面列出了提供的API的函数原型。安装后，taos.h位于：
 
@@ -205,6 +207,8 @@ C/C++的API类似于MySQL的C API。应用程序使用时，需要包含TDengine
     - port：TDengine管理主节点的端口号
 
   返回值为空表示失败。应用程序需要保存返回的参数，以便后续API调用。
+
+  **提示:** 同一进程可以根据不同的host/port 连接多个taosd 集群
 
 - `char *taos_get_server_info(TAOS *taos)`
 
@@ -309,7 +313,7 @@ TDengine的异步API均采用非阻塞调用模式。应用程序可以用多线
 <a class="anchor" id="stmt"></a>
 ### 参数绑定 API
 
-除了直接调用 `taos_query` 进行查询，TDengine 也提供了支持参数绑定的 Prepare API，与 MySQL 一样，这些 API 目前也仅支持用问号 `?` 来代表待绑定的参数。
+除了直接调用 `taos_query` 进行查询，TDengine 也提供了支持参数绑定的 Prepare API，与 MySQL 一样，这些 API 目前也仅支持用问号 `?` 来代表待绑定的参数。文档中有时也会把此功能称为“原生接口写入”。
 
 从 2.1.1.0 和 2.1.2.0 版本开始，TDengine 大幅改进了参数绑定接口对数据写入（INSERT）场景的支持。这样在通过参数绑定接口写入数据时，就避免了 SQL 语法解析的资源消耗，从而在绝大多数情况下显著提升写入性能。此时的典型操作步骤如下：
 1. 调用 `taos_stmt_init` 创建参数绑定对象；
@@ -326,7 +330,7 @@ TDengine的异步API均采用非阻塞调用模式。应用程序可以用多线
 
 除 C/C++ 语言外，TDengine 的 Java 语言 JNI Connector 也提供参数绑定接口支持，具体请另外参见：[参数绑定接口的 Java 用法](https://www.taosdata.com/cn/documentation/connector/java#stmt-java)。
 
-接口相关的具体函数如下（也可以参考 [apitest.c](https://github.com/taosdata/TDengine/blob/develop/tests/examples/c/apitest.c) 文件中使用对应函数的方式）：
+接口相关的具体函数如下（也可以参考 [prepare.c](https://github.com/taosdata/TDengine/blob/develop/tests/examples/c/prepare.c) 文件中使用对应函数的方式）：
 
 - `TAOS_STMT* taos_stmt_init(TAOS *taos)`
 
@@ -400,6 +404,82 @@ typedef struct TAOS_MULTI_BIND {
   （2.1.3.0 版本新增）  
   用于在其他 stmt API 返回错误（返回错误码或空指针）时获取错误信息。
 
+<a class="anchor" id="schemaless"></a>
+### Schemaless 方式写入接口
+
+除了使用 SQL 方式或者使用参数绑定 API 写入数据外，还可以使用 Schemaless 的方式完成写入。Schemaless 可以免于预先创建超级表/数据子表的数据结构，而是可以直接写入数据，TDengine 系统会根据写入的数据内容自动创建和维护所需要的表结构。Schemaless 的使用方式详见 [Schemaless 写入](https://www.taosdata.com/cn/documentation/insert#schemaless) 章节，这里介绍与之配套使用的 C/C++ API。  
+
+- `TAOS_RES* taos_schemaless_insert(TAOS* taos, const char* lines[], int numLines, int protocol, int precision)`
+  
+  **功能说明**  
+    该接口将行协议的文本数据写入到TDengine中。
+    
+  **参数说明**  
+    taos:  数据库连接，通过taos_connect 函数建立的数据库连接。  
+    lines：文本数据。满足解析格式要求的无模式文本字符串。  
+    numLines:文本数据的行数，不能为 0 。  
+    protocol: 行协议类型，用于标识文本数据格式。  
+    precision：文本数据中的时间戳精度字符串。  
+    
+  **返回值**  
+    TAOS_RES 结构体，应用可以通过使用 taos_errstr 获得错误信息，也可以使用 taos_errno 获得错误码。  
+    在某些情况下，返回的 TAOS_RES 为 NULL，此时仍然可以调用 taos_errno 来安全地获得错误码信息。  
+    返回的 TAOS_RES 需要调用方来负责释放，否则会出现内存泄漏。  
+      
+  **说明**  
+    协议类型是枚举类型，包含以下三种格式：  
+    TSDB_SML_LINE_PROTOCOL：InfluxDB行协议（Line Protocol)  
+    TSDB_SML_TELNET_PROTOCOL: OpenTSDB文本行协议  
+    TSDB_SML_JSON_PROTOCOL: OpenTSDB Json协议格式  
+    
+    时间戳分辨率的定义，定义在 taos.h 文件中，具体内容如下：  
+    TSDB_SML_TIMESTAMP_NOT_CONFIGURED = 0,  
+    TSDB_SML_TIMESTAMP_HOURS,  
+    TSDB_SML_TIMESTAMP_MINUTES,  
+    TSDB_SML_TIMESTAMP_SECONDS,  
+    TSDB_SML_TIMESTAMP_MILLI_SECONDS,  
+    TSDB_SML_TIMESTAMP_MICRO_SECONDS,  
+    TSDB_SML_TIMESTAMP_NANO_SECONDS  
+    
+    需要注意的是，时间戳分辨率参数只在协议类型为 SML_LINE_PROTOCOL 的时候生效。  
+    对于 OpenTSDB 的文本协议，时间戳的解析遵循其官方解析规则 — 按照时间戳包含的字符的数量来确认时间精度。
+    
+  **支持版本**  
+    该功能接口从2.3.0.0版本开始支持。
+  
+```c
+#include <stdlib.h>
+#include <stdio.h>
+#include <taos.h>
+ 
+int main() {
+  const char* host = "127.0.0.1";
+  const char* user = "root";
+  const char* passwd = "taosdata";
+    
+  // connect to server
+  TAOS* taos = taos_connect(host, user, passwd, "test", 0);
+   
+  // prepare the line string
+  char* lines1[] = {
+      "stg,t1=3i64,t2=4f64,t3=\"t3\" c1=3i64,c3=L\"passit\",c2=false,c4=4f64 1626006833639000000",
+      "stg,t1=4i64,t3=\"t4\",t2=5f64,t4=5f64 c1=3i64,c3=L\"passitagin\",c2=true,c4=5f64,c5=5f64 1626006833641000000"
+  };
+ 
+  // schema-less insert
+  TAOS_RES* res = taos_schemaless_insert(taos, lines1, 2, TSDB_SML_LINE_PROTOCOL, TSDB_SML_TIMESTAMP_NANO_SECONDS);
+  if (taos_errno(res) != 0) {
+    printf("failed to insert schema-less data, reason: %s\n", taos_errstr(res));
+  }
+ 
+  taos_free_result(res);
+ 
+  // close the connection
+  taos_close(taos);
+  return (code);
+}
+```
+
 ### 连续查询接口
 
 TDengine提供时间驱动的实时流式计算API。可以每隔一指定的时间段，对一张或多张数据库的表(数据流)进行各种实时聚合计算操作。操作简单，仅有打开、关闭流的API。具体如下： 
@@ -461,9 +541,8 @@ TDengine提供时间驱动的实时流式计算API。可以每隔一指定的时
 
 Python连接器的使用参见[视频教程](https://www.taosdata.com/blog/2020/11/11/1963.html)
 
-**安装**：参见下面具体步骤
-
-**示例程序**：位于install_directory/examples/python
+* **安装**：参见下面具体步骤
+* **示例程序**：位于install_directory/examples/python
 
 ### 安装
 
@@ -477,39 +556,36 @@ Python连接器支持的系统有：Linux 64/Windows x64
 
 ### Python连接器安装
 
-**Linux**
+Python 连接器可以通过 `pip` 从 PyPI 下载安装。注意 TDengine Python 连接器的包名为 `taospy` 而不是 `taos`（这是一个与 TDengine 无关的另一个程序）。但为保持向后兼容性，仍然使用 `import taos` 导入。
 
-用户可以在源代码的src/connector/python（或者tar.gz的/connector/python）文件夹下找到connector安装包。用户可以通过pip命令安装： 
-
-​		`pip install src/connector/python/`
-
-或
-
-​		`pip3 install src/connector/python/`
-
-**Windows**
-
-在已安装Windows TDengine 客户端的情况下， 将文件"C:\TDengine\driver\taos.dll" 拷贝到 "C:\Windows\system32" 目录下, 然后进入Windows *cmd* 命令行界面
 ```bash
-cd C:\TDengine\connector\python
-python -m pip install .
+pip install taospy
 ```
 
-* 如果机器上没有pip命令，用户可将src/connector/python下的taos文件夹拷贝到应用程序的目录使用。
-对于windows 客户端，安装TDengine windows 客户端后，将C:\TDengine\driver\taos.dll拷贝到C:\windows\system32目录下即可。
+如果不使用系统默认的 `python` 和 `pip`，则需要指定 `pip` 的版本或路径：
+
+```bash
+pip2 install taospy
+pip3 install taospy
+```
+
+Python 命令行依赖 taos 动态库 `libtaos.so` 或 `taos.dll`, 对于 Windows 客户端，安装TDengine windows 客户端后，如果不能正常 `import taos`，可以将 `C:\TDengine\driver\taos.dll` 拷贝到 `C:\windows\system32` 目录后重新尝试。
+
+对于无法联网用户，可以将TDengine客户端中的 `connector/python` 路径（Linux 下其安装路径为 `/usr/local/taos/connector/python/`，Windows 下默认安装路径为 `C:\TDengine\connector\python`）添加到 `PYTHONPATH` 环境变量中使用。
 
 ### 示例程序
 
-示例程序源码位于install_directory/examples/Python，有：
-**read_example.py       Python示例源程序**
+示例程序源码位于 `<install_directory>/examples/python`，有：
 
-用户可以参考read_example.py这个程序来设计用户自己的写入、查询程序。
+* **read_example.py**       Python示例源程序
 
-在安装了对应的应用驱动后，通过import taos引入taos类。主要步骤如下：
+用户可以参考`read_example.py`这个程序来设计用户自己的写入、查询程序。
 
-- 通过taos.connect获取TDengineConnection对象，这个对象可以一个程序只申请一个，在多线程中共享。
+在安装了对应的应用驱动后，通过`import taos`引入taos类。主要步骤如下：
 
-- 通过TDengineConnection对象的 .cursor()方法获取一个新的游标对象，这个游标对象必须保证每个线程独享。
+- 通过taos.connect获取TaosConnection对象，这个对象可以一个程序只申请一个，在多线程中共享。
+
+- 通过TaosConnection对象的 `.cursor()` 方法获取一个新的游标对象，这个游标对象必须保证每个线程独享。
 
 - 通过游标对象的execute()方法，执行写入或查询的SQL语句。
 
@@ -530,89 +606,191 @@ python3 PythonChecker.py -host <fqdn>
 
 ### Python连接器的使用
 
-#### 代码示例
+#### PEP-249 兼容API
 
-* 导入TDengine客户端模块
+您可以像其他数据库一样，使用类似 [PEP-249](https://www.python.org/dev/peps/pep-0249/) 数据库API规范风格的API：
 
 ```python
 import taos
+
+conn = taos.connect()
+cursor = conn.cursor()
+
+cursor.execute("show databases")
+results = cursor.fetchall()
+for row in results:
+    print(row)
 ```
-* 获取连接并获取游标对象
+
+##### 代码示例
+
+1. 导入TDengine客户端模块
+
+    ```python
+    import taos
+    ```
+
+2. 获取连接并获取游标对象
+
+    ```python
+    conn = taos.connect(host="127.0.0.1", user="root", password="taosdata", config="/etc/taos")
+    c1 = conn.cursor()
+    ```
+
+    *host* 是TDengine 服务端所在IP, *config* 为客户端配置文件所在目录。
+
+3. 写入数据
+
+    ```python
+    import datetime
+
+    # 创建数据库
+    c1.execute('create database db')
+    c1.execute('use db')
+    # 建表
+    c1.execute('create table tb (ts timestamp, temperature int, humidity float)')
+    # 插入数据
+    start_time = datetime.datetime(2019, 11, 1)
+    affected_rows = c1.execute('insert into tb values (\'%s\', 0, 0.0)' %start_time)
+    # 批量插入数据
+    time_interval = datetime.timedelta(seconds=60)
+    sqlcmd = ['insert into tb values']
+    for irow in range(1,11):
+        start_time += time_interval
+        sqlcmd.append('(\'%s\', %d, %f)' %(start_time, irow, irow*1.2))
+    affected_rows = c1.execute(' '.join(sqlcmd))
+    ```
+
+4. 查询数据
+
+    ```python
+    c1.execute('select * from tb')
+    # 拉取查询结果
+    data = c1.fetchall()
+    # 返回的结果是一个列表，每一行构成列表的一个元素
+    numOfRows = c1.rowcount
+    numOfCols = len(c1.description)
+    for irow in range(numOfRows):
+        print("Row%d: ts=%s, temperature=%d, humidity=%f" %(irow, data[irow][0], data[irow][1], data[irow][2]))
+
+    # 直接使用cursor 循环拉取查询结果
+    c1.execute('select * from tb')
+    for data in c1:
+        print("ts=%s, temperature=%d, humidity=%f" %(data[0], data[1], data[2]))
+    ```
+
+#### Query API
+
+从v2.1.0版本开始, 我们提供另外一种方法：`connection.query` 来操作数据库。
 
 ```python
-conn = taos.connect(host="127.0.0.1", user="root", password="taosdata", config="/etc/taos")
-c1 = conn.cursor()
-```
-* *host* 是TDengine 服务端所有IP, *config* 为客户端配置文件所在目录
+import taos
 
-* 写入数据
+conn = taos.connect()
+conn.execute("create database if not exists pytest")
+
+result = conn.query("show databases")
+num_of_fields = result.field_count
+for field in result.fields:
+    print(field)
+for row in result:
+    print(row)
+conn.execute("drop database pytest")
+```
+
+`query` 方法会返回一个 `TaosResult` 对象，并提供了以下属性或方法:
+
+属性:
+
+- `fields`: `TaosFields` 集合类，提供返回数据的列信息。
+- `field_count`: 返回数据的列数.
+- `affected_rows`: 插入数据的行数.
+- `row_count`: 查询数据结果数.
+- `precision`: 当前数据库的时间精度.
+
+方法:
+
+- `fetch_all()`: 类似于 `cursor.fetchall()` 返回同样的集合数据
+- `fetch_all_into_dict()`: v2.1.1 新添加的API，将上面的数据转换成字典类型返回
+- `blocks_iter()` `rows_iter()`: 根据底层API提供的两种不同迭代器。
+- `fetch_rows_a`: 异步API
+- `errno`: 错误码
+- `errstr`: 错误信息
+- `close`: 关闭结果对象，一般不需要直接调用
+
+#### 订阅 API
+
+1. 创建一个同步订阅队列：
+
+    ```python
+    # 创建一个主题为 'test' 消费周期为1000毫秒的订阅
+    #   第一个参数为 True 表示重新开始订阅，如为 False 且之前创建过主题为 'test' 的订阅，
+    #   则表示继续消费此订阅的数据，而不是重新开始消费所有数据
+    sub = conn.subscribe(True, "test", "select * from tb;", 1000)
+    ```
+
+2. 消费订阅的数据
+
+    ```python
+    data = sub.consume()
+    for d in data:
+        print(d)
+    ```
+
+3. 取消订阅
+
+    ```python
+    sub.close()
+    ```
+
+4. 关闭连接
+
+    ```python
+    conn.close()
+    ```
+
+#### JSON 类型
+
+从 `taospy` `v2.2.0` 开始，Python连接器开始支持 JSON 数据类型的标签（TDengine版本要求 Beta 版 2.3.5+， 稳定版 2.4.0+）。
+
+创建一个使用JSON类型标签的超级表及其子表：
 
 ```python
-import datetime
+# encoding:UTF-8
+import taos
 
-# 创建数据库
-c1.execute('create database db')
-c1.execute('use db')
-# 建表
-c1.execute('create table tb (ts timestamp, temperature int, humidity float)')
-# 插入数据
-start_time = datetime.datetime(2019, 11, 1)
-affected_rows = c1.execute('insert into tb values (\'%s\', 0, 0.0)' %start_time)
-# 批量插入数据
-time_interval = datetime.timedelta(seconds=60)
-sqlcmd = ['insert into tb values']
-for irow in range(1,11):
-  start_time += time_interval
-  sqlcmd.append('(\'%s\', %d, %f)' %(start_time, irow, irow*1.2))
-affected_rows = c1.execute(' '.join(sqlcmd))
+conn = taos.connect()
+conn.execute("create database if not exists py_test_json_type")
+conn.execute("use py_test_json_type")
+
+conn.execute("create stable s1 (ts timestamp, v1 int) tags (info json)")
+conn.execute("create table s1_1 using s1 tags ('{\"k1\": \"v1\"}')")
 ```
 
-* 查询数据
+查询子表标签及表名：
 
 ```python
-c1.execute('select * from tb')
-# 拉取查询结果
-data = c1.fetchall()
-# 返回的结果是一个列表，每一行构成列表的一个元素
-numOfRows = c1.rowcount
-numOfCols = len(c1.description)
-for irow in range(numOfRows):
-  print("Row%d: ts=%s, temperature=%d, humidity=%f" %(irow, data[irow][0], data[irow][1],data[irow][2]))
-
-# 直接使用cursor 循环拉取查询结果
-c1.execute('select * from tb')
-for data in c1:
-  print("ts=%s, temperature=%d, humidity=%f" %(data[0], data[1],data[2]))
+tags = conn.query("select info, tbname from s1").fetch_all_into_dict()
+tags
 ```
 
-* 创建订阅
+`tags` 内容为：
 
 ```python
-# 创建一个主题为 'test' 消费周期为1000毫秒的订阅
-# 第一个参数为 True 表示重新开始订阅，如为 False 且之前创建过主题为 'test' 的订阅，则表示继续消费此订阅的数据，而不是重新开始消费所有数据
-sub = conn.subscribe(True, "test", "select * from tb;", 1000)
+[{'info': '{"k1":"v1"}', 'tbname': 's1_1'}]
 ```
 
-* 消费订阅的数据
+获取 JSON 中某值：
 
 ```python
-data = sub.consume()
-for d in data:
-    print(d)
+k1 = conn.query("select info->'k1' as k1 from s1").fetch_all_into_dict()
+"""
+>>> k1
+[{'k1': '"v1"'}]
+"""
 ```
 
-* 取消订阅
-
-```python
-sub.close()
-```
-
-* 关闭连接
-
-```python
-c1.close()
-conn.close()
-```
+更多JSON类型的操作方式请参考 [JSON 类型使用说明](https://www.taosdata.com/cn/documentation/taos-sql)。
 
 #### 关于纳秒 (nanosecond) 在 Python 连接器中的说明
 
@@ -625,51 +803,42 @@ conn.close()
 
 用户可通过python的帮助信息直接查看模块的使用信息，或者参考tests/examples/python中的示例程序。以下为部分常用类和方法：
 
-- _TDengineConnection_ 类
+- _TaosConnection_ 类
 
-  参考python中help(taos.TDengineConnection)。
+  参考python中help(taos.TaosConnection)。
   这个类对应客户端和TDengine建立的一个连接。在客户端多线程的场景下，推荐每个线程申请一个独立的连接实例，而不建议多线程共享一个连接。
 
-- _TDengineCursor_ 类
+- _TaosCursor_ 类
 
-  参考python中help(taos.TDengineCursor)。
+  参考python中help(taos.TaosCursor)。
   这个类对应客户端进行的写入、查询操作。在客户端多线程的场景下，这个游标实例必须保持线程独享，不能跨线程共享使用，否则会导致返回结果出现错误。
 
 - _connect_ 方法
 
-  用于生成taos.TDengineConnection的实例。
+  用于生成taos.TaosConnection的实例。
 
-### Python客户端使用示例代码
-
-在tests/examples/python中，我们提供了一个示例Python程序read_example.py，可以参考这个程序来设计用户自己的写入、查询程序。在安装了对应的客户端后，通过import taos引入taos类。主要步骤如下
-
-- 通过taos.connect获取TDengineConnection对象，这个对象可以一个程序只申请一个，在多线程中共享。
-- 通过TDengineConnection对象的 .cursor()方法获取一个新的游标对象，这个游标对象必须保证每个线程独享。
-- 通过游标对象的execute()方法，执行写入或查询的SQL语句。
-- 如果执行的是写入语句，execute返回的是成功写入的行数信息affected rows。
-- 如果执行的是查询语句，则execute执行成功后，需要通过fetchall方法去拉取结果集。
-具体方法可以参考示例代码。
 
 ## <a class="anchor" id="restful"></a>RESTful Connector
 
 为支持各种不同类型平台的开发，TDengine 提供符合 REST 设计标准的 API，即 RESTful API。为最大程度降低学习成本，不同于其他数据库 RESTful API 的设计方法，TDengine 直接通过 HTTP POST 请求 BODY 中包含的 SQL 语句来操作数据库，仅需要一个 URL。RESTful 连接器的使用参见[视频教程](https://www.taosdata.com/blog/2020/11/11/1965.html)。
 
-注意：与标准连接器的一个区别是，RESTful 接口是无状态的，因此 `USE db_name` 指令没有效果，所有对表名、超级表名的引用都需要指定数据库名前缀。
+注意：与标准连接器的一个区别是，RESTful 接口是无状态的，因此 `USE db_name` 指令没有效果，所有对表名、超级表名的引用都需要指定数据库名前缀。（从 2.2.0.0 版本开始，支持在 RESTful url 中指定 db_name，这时如果 SQL 语句中没有指定数据库名前缀的话，会使用 url 中指定的这个 db_name。）
 
 ### 安装
 
-RESTful接口不依赖于任何TDengine的库，因此客户端不需要安装任何TDengine的库，只要客户端的开发语言支持HTTP协议即可。
+RESTful 接口不依赖于任何 TDengine 的库，因此客户端不需要安装任何 TDengine 的库，只要客户端的开发语言支持 HTTP 协议即可。
 
 ### 验证
 
-在已经安装TDengine服务器端的情况下，可以按照如下方式进行验证。
+在已经安装 TDengine 服务器端的情况下，可以按照如下方式进行验证。
 
-下面以Ubuntu环境中使用curl工具（确认已经安装）来验证RESTful接口的正常。
+下面以 Ubuntu 环境中使用 curl 工具（确认已经安装）来验证 RESTful 接口的正常。
 
-下面示例是列出所有的数据库，请把h1.taosdata.com和6041（缺省值）替换为实际运行的TDengine服务fqdn和端口号：
+下面示例是列出所有的数据库，请把 h1.taosdata.com 和 6041（缺省值）替换为实际运行的 TDengine 服务 fqdn 和端口号：
 ```html
 curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'show databases;' h1.taosdata.com:6041/rest/sql
 ```
+
 返回值结果如下表示验证通过：
 ```json
 {
@@ -682,22 +851,23 @@ curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'show databases;' h1.taos
 }
 ```
 
-### RESTful连接器的使用
+### RESTful 连接器的使用
 
-#### HTTP请求格式 
+#### HTTP 请求格式 
 
 ```
-http://<fqdn>:<port>/rest/sql
+http://<fqdn>:<port>/rest/sql/[db_name]
 ```
 
 参数说明：
 
-- fqnd: 集群中的任一台主机FQDN或IP地址
-- port: 配置文件中httpPort配置项，缺省为6041
+- fqnd: 集群中的任一台主机 FQDN 或 IP 地址
+- port: 配置文件中 httpPort 配置项，缺省为 6041
+- db_name: 可选参数，指定本次所执行的 SQL 语句的默认数据库库名。（从 2.2.0.0 版本开始支持）
 
-例如：http://h1.taos.com:6041/rest/sql 是指向地址为h1.taos.com:6041的url。
+例如：http://h1.taos.com:6041/rest/sql/test 是指向地址为 h1.taos.com:6041 的 url，并将默认使用的数据库库名设置为 test。
 
-HTTP请求的Header里需带有身份认证信息，TDengine支持Basic认证与自定义认证两种机制，后续版本将提供标准安全的数字签名机制来做身份验证。
+HTTP 请求的 Header 里需带有身份认证信息，TDengine 支持 Basic 认证与自定义认证两种机制，后续版本将提供标准安全的数字签名机制来做身份验证。
 
 - 自定义身份认证信息如下所示（<token>稍后介绍）
 
@@ -711,25 +881,25 @@ Authorization: Taosd <TOKEN>
 Authorization: Basic <TOKEN>
 ```
 
-HTTP请求的BODY里就是一个完整的SQL语句，SQL语句中的数据表应提供数据库前缀，例如\<db-name>.\<tb-name>。如果表名不带数据库前缀，系统会返回错误。因为HTTP模块只是一个简单的转发，没有当前DB的概念。 
+HTTP 请求的 BODY 里就是一个完整的 SQL 语句，SQL 语句中的数据表应提供数据库前缀，例如 \<db_name>.\<tb_name>。如果表名不带数据库前缀，又没有在 url 中指定数据库名的话，系统会返回错误。因为 HTTP 模块只是一个简单的转发，没有当前 DB 的概念。 
 
-使用curl通过自定义身份认证方式来发起一个HTTP Request，语法如下：
+使用 curl 通过自定义身份认证方式来发起一个 HTTP Request，语法如下：
 
 ```bash
-curl -H 'Authorization: Basic <TOKEN>' -d '<SQL>' <ip>:<PORT>/rest/sql
+curl -H 'Authorization: Basic <TOKEN>' -d '<SQL>' <ip>:<PORT>/rest/sql/[db_name]
 ```
 
 或者
 
 ```bash
-curl -u username:password -d '<SQL>' <ip>:<PORT>/rest/sql
+curl -u username:password -d '<SQL>' <ip>:<PORT>/rest/sql/[db_name]
 ```
 
-其中，`TOKEN`为`{username}:{password}`经过Base64编码之后的字符串，例如`root:taosdata`编码后为`cm9vdDp0YW9zZGF0YQ==`
+其中，`TOKEN` 为 `{username}:{password}` 经过 Base64 编码之后的字符串，例如 `root:taosdata` 编码后为 `cm9vdDp0YW9zZGF0YQ==`
 
-### HTTP返回格式
+### HTTP 返回格式
 
-返回值为JSON格式，如下:
+返回值为 JSON 格式，如下:
 
 ```json
 {
@@ -747,12 +917,12 @@ curl -u username:password -d '<SQL>' <ip>:<PORT>/rest/sql
 说明：
 
 - status: 告知操作结果是成功还是失败。
-- head: 表的定义，如果不返回结果集，则仅有一列“affected_rows”。（从 2.0.17.0 版本开始，建议不要依赖 head 返回值来判断数据列类型，而推荐使用 column_meta。在未来版本中，有可能会从返回值中去掉 head 这一项。）
+- head: 表的定义，如果不返回结果集，则仅有一列 “affected_rows”。（从 2.0.17.0 版本开始，建议不要依赖 head 返回值来判断数据列类型，而推荐使用 column_meta。在未来版本中，有可能会从返回值中去掉 head 这一项。）
 - column_meta: 从 2.0.17.0 版本开始，返回值中增加这一项来说明 data 里每一列的数据类型。具体每个列会用三个值来说明，分别为：列名、列类型、类型长度。例如`["current",6,4]`表示列名为“current”；列类型为 6，也即 float 类型；类型长度为 4，也即对应 4 个字节表示的 float。如果列类型为 binary 或 nchar，则类型长度表示该列最多可以保存的内容长度，而不是本次返回值中的具体数据长度。当列类型是 nchar 的时候，其类型长度表示可以保存的 unicode 字符数量，而不是 bytes。
-- data: 具体返回的数据，一行一行的呈现，如果不返回结果集，那么就仅有[[affected_rows]]。data 中每一行的数据列顺序，与 column_meta 中描述数据列的顺序完全一致。
+- data: 具体返回的数据，一行一行的呈现，如果不返回结果集，那么就仅有 [[affected_rows]]。data 中每一行的数据列顺序，与 column_meta 中描述数据列的顺序完全一致。
 - rows: 表明总共多少行数据。
 
-column_meta 中的列类型说明：
+<a class="anchor" id="column_meta"></a>column_meta 中的列类型说明：
 * 1：BOOL
 * 2：TINYINT
 * 3：SMALLINT
@@ -766,13 +936,13 @@ column_meta 中的列类型说明：
 
 ### 自定义授权码
 
-HTTP请求中需要带有授权码`<TOKEN>`，用于身份识别。授权码通常由管理员提供，可简单的通过发送`HTTP GET`请求来获取授权码，操作如下：
+HTTP 请求中需要带有授权码 `<TOKEN>`，用于身份识别。授权码通常由管理员提供，可简单的通过发送 `HTTP GET` 请求来获取授权码，操作如下：
 
 ```bash
 curl http://<fqnd>:<port>/rest/login/<username>/<password>
 ```
 
-其中，`fqdn`是TDengine数据库的fqdn或ip地址，port是TDengine服务的端口号，`username`为数据库用户名，`password`为数据库密码，返回值为`JSON`格式，各字段含义如下：
+其中，`fqdn` 是 TDengine 数据库的 fqdn 或 ip 地址，port 是 TDengine 服务的端口号，`username` 为数据库用户名，`password` 为数据库密码，返回值为 `JSON` 格式，各字段含义如下：
 
 - status：请求结果的标志位
 
@@ -798,7 +968,7 @@ curl http://192.168.0.1:6041/rest/login/root/taosdata
 
 ### 使用示例
 
-- 在demo库里查询表d1001的所有记录： 
+- 在 demo 库里查询表 d1001 的所有记录： 
 
 ```bash
 curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'select * from demo.d1001' 192.168.0.1:6041/rest/sql
@@ -818,7 +988,7 @@ curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'select * from demo.d1001
 }
 ```
 
-- 创建库demo：
+- 创建库 demo：
 
 ```bash
 curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'create database demo' 192.168.0.1:6041/rest/sql
@@ -837,9 +1007,9 @@ curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'create database demo' 19
 
 ### 其他用法
 
-#### 结果集采用Unix时间戳
+#### 结果集采用 Unix 时间戳
 
-HTTP请求URL采用`sqlt`时，返回结果集的时间戳将采用Unix时间戳格式表示，例如
+HTTP 请求 URL 采用 `sqlt` 时，返回结果集的时间戳将采用 Unix 时间戳格式表示，例如
 
 ```bash
 curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'select * from demo.d1001' 192.168.0.1:6041/rest/sqlt
@@ -860,9 +1030,9 @@ curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'select * from demo.d1001
 }
 ```
 
-#### 结果集采用UTC时间字符串
+#### 结果集采用 UTC 时间字符串
 
-HTTP请求URL采用`sqlutc`时，返回结果集的时间戳将采用UTC时间字符串表示，例如
+HTTP 请求 URL 采用 `sqlutc` 时，返回结果集的时间戳将采用 UTC 时间字符串表示，例如
 ```bash
   curl -H 'Authorization: Basic cm9vdDp0YW9zZGF0YQ==' -d 'select * from demo.t1' 192.168.0.1:6041/rest/sqlutc
 ```
@@ -884,53 +1054,73 @@ HTTP请求URL采用`sqlutc`时，返回结果集的时间戳将采用UTC时间�
 
 ### 重要配置项
 
-下面仅列出一些与RESTful接口有关的配置参数，其他系统参数请看配置文件里的说明。（注意：配置修改后，需要重启taosd服务才能生效）
+下面仅列出一些与 RESTful 接口有关的配置参数，其他系统参数请看配置文件里的说明。（注意：配置修改后，需要重启 taosd 服务才能生效）
 
-- 对外提供RESTful服务的端口号，默认绑定到 6041（实际取值是 serverPort + 11，因此可以通过修改 serverPort 参数的设置来修改）
-- httpMaxThreads: 启动的线程数量，默认为2（2.0.17.0版本开始，默认值改为CPU核数的一半向下取整）
-- restfulRowLimit: 返回结果集（JSON格式）的最大条数，默认值为10240
-- httpEnableCompress: 是否支持压缩，默认不支持，目前TDengine仅支持gzip压缩格式
-- httpDebugFlag: 日志开关，默认131。131：仅错误和报警信息，135：调试信息，143：非常详细的调试信息，默认131
+- 对外提供 RESTful 服务的端口号，默认绑定到 6041（实际取值是 serverPort + 11，因此可以通过修改 serverPort 参数的设置来修改）。
+- httpMaxThreads: 启动的线程数量，默认为 2（2.0.17.0 版本开始，默认值改为 CPU 核数的一半向下取整）。
+- restfulRowLimit: 返回结果集（JSON 格式）的最大条数，默认值为 10240。
+- httpEnableCompress: 是否支持压缩，默认不支持，目前 TDengine 仅支持 gzip 压缩格式。
+- httpDebugFlag: 日志开关，默认 131。131：仅错误和报警信息，135：调试信息，143：非常详细的调试信息，默认 131。
+- httpDbNameMandatory: 是否必须在 RESTful url 中指定默认的数据库名。默认为 0，即关闭此检查。如果设置为 1，那么每个 RESTful url 中都必须设置一个默认数据库名，否则无论此时执行的 SQL 语句是否需要指定数据库，都会返回一个执行错误，拒绝执行此 SQL 语句。
 
 ## <a class="anchor" id="csharp"></a>CSharp Connector
 
-C#连接器支持的系统有：Linux 64/Windows x64/Windows x86
+* C#连接器支持的系统有：Linux 64/Windows x64/Windows x86
 
+* C#连接器现在也支持从[Nuget下载引用](https://www.nuget.org/packages/TDengine.Connector/)
+
+* 在Windows系统上，C#应用程序可以使用TDengine的原生C接口来执行所有数据库操作，后续版本将提供ORM（Dapper）框架驱动。
 ### 安装准备
 
 * 应用驱动安装请参考[安装连接器驱动步骤](https://www.taosdata.com/cn/documentation/connector#driver)。
-* 接口文件﻿TDengineDrivercs.cs和参考程序示例TDengineTest.cs均位于Windows客户端install_directory/examples/C#目录下。
-* 在Windows系统上，C#应用程序可以使用TDengine的原生C接口来执行所有数据库操作，后续版本将提供ORM（Dapper）框架驱动。
+* 接口文件TDengineDrivercs.cs和参考程序示例TDengineTest.cs均位于Windows客户端install_directory/examples/C#目录下。
+* 安装[.NET SDK](https://dotnet.microsoft.com/download)
 
 ### 示例程序
 
-示例程序源码位于install_directory/examples/C#，有：
+示例程序源码位于
+* {client_install_directory}/examples/C#
+* [github C# example source code](https://github.com/taosdata/TDengine/tree/develop/tests/examples/C%2523)
 
-TDengineTest.cs       C#示例源程序
+**注意:** TDengineTest.cs       C#示例源程序,包含了数据库连接参数，以及如何执行数据插入、查询等操作。
 
 ### 安装验证
 
-运行install_directory/examples/C#/C#Checker/C#Checker.exe
-
+需要先安装 .Net SDK
 ```cmd
-cd {install_directory}/examples/C#/C#Checker
-csc /optimize *.cs
-C#Checker.exe -h <fqdn>
+cd {client_install_directory}/examples/C#/C#Checker
+//运行测试
+dotnet run -- -h <FQDN>. // 此步骤会先build，然后再运行。
 ```
 
 ### C#连接器的使用
 
 在Windows系统上，C#应用程序可以使用TDengine的C#连接器接口来执行所有数据库的操作。使用的具体步骤如下所示：
 
-1. 将接口文件﻿TDengineDrivercs.cs加入到应用程序所在的项目空间中。
-2. 用户可以参考﻿TDengineTest.cs来定义数据库连接参数，以及如何执行数据插入、查询等操作。
+需要 .NET SDK
+* 创建一个c# project. 
+``` cmd
+mkdir test
+cd test 
+dotnet new console
+```
+* 通过Nuget引用TDengineDriver包
+``` cmd
+dotnet add package TDengine.Connector
+```
+* 在项目中需要用到TDengineConnector的地方引用TDengineDriver namespace。
+```c# 
+using TDengineDriver;
+```
+* 用户可以参考[TDengineTest.cs](https://github.com/taosdata/TDengine/tree/develop/tests/examples/C%2523/TDengineTest)来定义数据库连接参数，以及如何执行数据插入、查询等操作。
 
-此接口需要用到taos.dll文件，所以在执行应用程序前，拷贝Windows客户端install_directory/driver目录中的taos.dll文件到项目最后生成.exe可执行文件所在的文件夹。之后运行exe文件，即可访问TDengine数据库并做插入、查询等操作。
 
 **注意：**
 
-1. TDengine V2.0.3.0之后同时支持32位和64位Windows系统，所以C#项目在生成.exe文件时，“解决方案”/“项目”的“平台”请选择对应的“X86” 或“x64”。
-2. 此接口目前已经在Visual Studio 2015/2017中验证过，其它VS版本尚待验证。
+* TDengine V2.0.3.0之后同时支持32位和64位Windows系统，所以C#项目在生成.exe文件时，“解决方案”/“项目”的“平台”请选择对应的“X86” 或“x64”。
+* 此接口目前已经在Visual Studio 2015/2017中验证过，其它VS版本尚待验证。
+* 此连接器需要用到taos.dll文件，所以在未安装客户端时需要在执行应用程序前，拷贝Windows{client_install_directory}/driver目录中的taos.dll文件到项目最后生成.exe可执行文件所在的文件夹。之后运行exe文件，即可访问TDengine数据库并做插入、查询等操作。
+
 
 ### 第三方驱动
 
@@ -966,25 +1156,32 @@ Go连接器支持的系统有：
 
 **提示：建议Go版本是1.13及以上，并开启模块支持：**
 ```sh
-  go env -w GO111MODULE=on  
-  go env -w GOPROXY=https://goproxy.io,direct  
+go env -w GO111MODULE=on
+go env -w GOPROXY=https://goproxy.io,direct
 ```
 在taosdemo.go所在目录下进行编译和执行：
 ```sh
-  go mod init *demo*  
-  go build   ./demo -h fqdn -p serverPort  
+go mod init taosdemo
+go get github.com/taosdata/driver-go/taosSql
+# use win branch in Windows platform.
+#go get github.com/taosdata/driver-go/taosSql@win
+go build
+./taosdemo -h fqdn -p serverPort
 ```
 
 ### Go连接器的使用
 
-TDengine提供了GO驱动程序包`taosSql`.`taosSql`实现了GO语言的内置接口`database/sql/driver`。用户只需按如下方式引入包就可以在应用程序中访问TDengine。
+TDengine提供了GO驱动程序包`taosSql`。`taosSql`实现了GO语言的内置接口`database/sql/driver`。用户只需按如下方式引入包就可以在应用程序中访问TDengine。
 ```go
 import (
   "database/sql"
-  _ "github.com/taosdata/driver-go/taosSql"
+  _ "github.com/taosdata/driver-go/v2/taosSql"
 )
 ```
+
 **提示**：下划线与双引号之间必须有一个空格。
+
+`taosSql` 的 v2 版本进行了重构，分离出内置数据库操作接口 `database/sql/driver` 到目录 `taosSql`；订阅、stmt等其他功能放到目录 `af`。
 
 ### 常用API
 
@@ -1102,7 +1299,7 @@ node nodejsChecker.js host=localhost
 
 ### Node.js连接器的使用
 
-以下是Node.js 连接器的一些基本使用方法，详细的使用方法可参考[TDengine Node.js connector](http://docs.taosdata.com/node)。
+以下是Node.js 连接器的一些基本使用方法，详细的使用方法可参考[TDengine Node.js connector](https://github.com/taosdata/TDengine/tree/develop/src/connector/nodejs)。
 
 #### 建立连接
 
@@ -1134,7 +1331,7 @@ var affectRows = cursor.execute('insert into test.weather values(now, 22.3, 34);
 
 execute方法的返回值为该语句影响的行数，上面的sql向test库的weather表中，插入了一条数据，则返回值affectRows为1。
 
-TDengine目前还不支持update和delete语句。
+TDengine 目前还不支持 delete 语句。但从 2.0.8.0 版本开始，可以通过 `CREATE DATABASE` 时指定的 UPDATE 参数来启用对数据行的 update。
 
 #### 查询
 

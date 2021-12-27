@@ -37,7 +37,7 @@ class TDTestCase:
             projPath = selfPath[:selfPath.find("tests")]
 
         for root, dirs, files in os.walk(projPath):
-            if ("taosdump" in files):
+            if ("taosd" in files):
                 rootRealPath = os.path.dirname(os.path.realpath(root))
                 if ("packaging" not in rootRealPath):
                     buildPath = root[:len(root) - len("/build/bin")]
@@ -69,7 +69,7 @@ class TDTestCase:
 
         os.system("rm /tmp/*.sql")
         os.system(
-            "%staosdump --databases db -o /tmp -B 32766 -L 1048576" %
+            "%staosdump --databases db -o /tmp -B 16384 -L 1048576" %
             binPath)
 
         tdSql.execute("drop database db")

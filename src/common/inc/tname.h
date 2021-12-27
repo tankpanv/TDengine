@@ -51,7 +51,7 @@ typedef struct SSqlExpr {
   int16_t   functionId;     // function id in aAgg array
 
   int16_t   resType;        // return value type
-  int16_t   resBytes;       // length of return value
+  int32_t   resBytes;       // length of return value
   int32_t   interBytes;     // inter result buffer size
 
   int16_t   colType;        // table column type
@@ -91,6 +91,10 @@ char* extractDBName(const char *tableId, char *name);
 size_t tableIdPrefix(const char* name, char* prefix, int32_t len);
 
 void extractTableNameFromToken(SStrToken *pToken, SStrToken* pTable);
+
+char *tableNameGetPosition(SStrToken* pToken, char target);
+
+char *tableNameToStr(char *dst, char *src, char quote);
 
 SSchema tGetUserSpecifiedColumnSchema(tVariant* pVal, SStrToken* exprStr, const char* name);
 

@@ -70,7 +70,7 @@ void doubleSkipListTest() {
 }
 
 void randKeyTest() {
-  SSkipList* pSkipList = tSkipListCreate(10, TSDB_DATA_TYPE_INT, sizeof(int32_t), getKeyComparFunc(TSDB_DATA_TYPE_INT),
+  SSkipList* pSkipList = tSkipListCreate(10, TSDB_DATA_TYPE_INT, sizeof(int32_t), getKeyComparFunc(TSDB_DATA_TYPE_INT, TSDB_ORDER_ASC),
       false, getkey);
 
   int32_t size = 200000;
@@ -300,7 +300,7 @@ void duplicatedKeyTest() {
     SSkipListKey key;
     SArray*  nodes = tSkipListGet(pSkipList, (char*)(&i));
     assert( taosArrayGetSize(nodes) == 5 );
-    taosArrayDestroy(nodes);
+    taosArrayDestroy(&nodes);
   }
 
   int32_t key = 101;
@@ -309,7 +309,7 @@ void duplicatedKeyTest() {
 
   SArray*  nodes = tSkipListGet(pSkipList, (char*)(&key));
   assert( taosArrayGetSize(nodes) == 0 );
-  taosArrayDestroy(nodes);
+  taosArrayDestroy(&nodes);
 
   key = 102;
   SSkipListIterator* iter = tSkipListCreateIterFromVal(pSkipList, (char*)(&key), TSDB_DATA_TYPE_INT, TSDB_ORDER_ASC);

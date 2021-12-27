@@ -27,11 +27,14 @@ extern "C" {
 
 int32_t strdequote(char *src);
 int32_t strRmquote(char *z, int32_t len);
+int32_t strRmquoteEscape(char *z, int32_t len);
 size_t  strtrim(char *src);
+char *  tstrstr(char *src, char *dst, bool ignoreInEsc);
 char *  strnchr(char *haystack, char needle, int32_t len, bool skipquote);
 char ** strsplit(char *src, const char *delim, int32_t *num);
 char *  strtolower(char *dst, const char *src);
 char *  strntolower(char *dst, const char *src, int32_t n);
+char *  strntolower_s(char *dst, const char *src, int32_t n);
 int64_t strnatoi(char *num, int32_t len);
 char *  strbetween(char *string, char *begin, char *end);
 char *  paGetToken(char *src, char **token, int32_t *tokenLen);
@@ -44,6 +47,8 @@ int  taosCheckVersion(char *input_client_version, char *input_server_version, in
 
 char *   taosIpStr(uint32_t ipInt);
 uint32_t ip2uint(const char *const ip_addr);
+void jsonKeyMd5(void *pMsg, int msgLen, void *pKey);
+bool isValidateTag(char *input);
 
 static FORCE_INLINE void taosEncryptPass(uint8_t *inBuf, size_t inLen, char *target) {
   MD5_CTX context;

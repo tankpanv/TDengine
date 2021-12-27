@@ -15,8 +15,9 @@
 #define _GNU_SOURCE
 
 #include "os.h"
-
 #include "texpr.h"
+
+#include "tsched.h"
 #include "qTsbuf.h"
 #include "tcompare.h"
 #include "tscLog.h"
@@ -226,6 +227,7 @@ static int64_t doTSBlockIntersect(SSqlObj* pSql, STimeWindow * win) {
       if (skipped) {
         slot = 0;
         stackidx = 0;
+        tVariantDestroy(&tag);
         continue;
       }
 
@@ -333,6 +335,7 @@ static int64_t doTSBlockIntersect(SSqlObj* pSql, STimeWindow * win) {
       }
 
       if (mergeDone) {
+        tVariantDestroy(&tag);
         break;
       }
 
@@ -340,6 +343,7 @@ static int64_t doTSBlockIntersect(SSqlObj* pSql, STimeWindow * win) {
       stackidx = 0;
 
       skipRemainValue(mainCtx->p->pTSBuf, &tag);
+      tVariantDestroy(&tag);
     }
 
     stackidx = 0;
@@ -385,13 +389,19 @@ SJoinSupporter* tscCreateJoinSupporter(SSqlObj* pSql, int32_t index) {
     return NULL;
   }
 
-  pSupporter->pObj = pSql;
+  pSupporter->pObj = pSql->self;
 
   pSupporter->subqueryIndex = index;
   SQueryInfo* pQueryInfo = tscGetQueryInfo(&pSql->cmd);
   
   memcpy(&pSupporter->interval, &pQueryInfo->interval, sizeof(pSupporter->interval));
   pSupporter->limit = pQueryInfo->limit;
+
+  if (tscIsPointInterpQuery(pQueryInfo)) {
+    pSupporter->fillType = pQueryInfo->fillType;
+    pSupporter->fillVal = pQueryInfo->fillVal;
+    pSupporter->numOfFillVal = pQueryInfo->numOfFillVal;
+  }
 
   STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, index);
   pSupporter->uid = pTableMetaInfo->pTableMeta->id.uid;
@@ -421,7 +431,7 @@ static void tscDestroyJoinSupporter(SJoinSupporter* pSupporter) {
 
 //  tscFieldInfoClear(&pSupporter->fieldsInfo);
   if (pSupporter->fieldsInfo.internalField != NULL) {
-    taosArrayDestroy(pSupporter->fieldsInfo.internalField);
+    taosArrayDestroy(&pSupporter->fieldsInfo.internalField);
   }
   if (pSupporter->pTSBuf != NULL) {
     tsBufDestroy(pSupporter->pTSBuf);
@@ -436,7 +446,7 @@ static void tscDestroyJoinSupporter(SJoinSupporter* pSupporter) {
   }
 
   if (pSupporter->pVgroupTables != NULL) {
-    //taosArrayDestroy(pSupporter->pVgroupTables);
+    //taosArrayDestroy(&pSupporter->pVgroupTables);
     tscFreeVgroupTableInfo(pSupporter->pVgroupTables); 
     pSupporter->pVgroupTables = NULL;
   }
@@ -578,6 +588,13 @@ static int32_t tscLaunchRealSubqueries(SSqlObj* pSql) {
     pQueryInfo->fieldsInfo  = pSupporter->fieldsInfo;
     pQueryInfo->groupbyExpr = pSupporter->groupInfo;
     pQueryInfo->pUpstream   = taosArrayInit(4, sizeof(POINTER_BYTES));
+    
+    if (tscIsPointInterpQuery(pQueryInfo)) {
+      pQueryInfo->fillType = pSupporter->fillType;
+      pQueryInfo->numOfFillVal = pSupporter->numOfFillVal;
+      pQueryInfo->fillVal = malloc(pQueryInfo->numOfFillVal * sizeof(*pSupporter->fillVal));
+      memcpy(pQueryInfo->fillVal, pSupporter->fillVal, sizeof(*pSupporter->fillVal) * pQueryInfo->numOfFillVal);
+    }
 
     assert(pNew->subState.numOfSub == 0 && pQueryInfo->numOfTables == 1);
   
@@ -619,17 +636,21 @@ static int32_t tscLaunchRealSubqueries(SSqlObj* pSql) {
     // set the join condition tag column info, todo extract method
     if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
       assert(pQueryInfo->tagCond.joinInfo.hasJoin);
+      pExpr->base.numOfParams = 0;    // the value is 0 by default. just make sure.
+      // add json tag key, if there is no json tag key, just hold place.
+      tVariantCreateFromBinary(&(pExpr->base.param[pExpr->base.numOfParams]), pQueryInfo->tagCond.joinInfo.joinTables[0]->tagJsonKeyName,
+                               strlen(pQueryInfo->tagCond.joinInfo.joinTables[0]->tagJsonKeyName), TSDB_DATA_TYPE_BINARY);
+      pExpr->base.numOfParams++;
       int16_t colId = tscGetJoinTagColIdByUid(&pQueryInfo->tagCond, pTableMetaInfo->pTableMeta->id.uid);
 
       // set the tag column id for executor to extract correct tag value
-#ifndef _TD_NINGSI_60
-      pExpr->base.param[0] = (tVariant) {.i64 = colId, .nType = TSDB_DATA_TYPE_BIGINT, .nLen = sizeof(int64_t)};
-#else
-      pExpr->base.param[0].i64 = colId;
-      pExpr->base.param[0].nType = TSDB_DATA_TYPE_BIGINT;
-      pExpr->base.param[0].nLen = sizeof(int64_t);
-#endif
-      pExpr->base.numOfParams = 1;
+      tVariant* pVariant = &pExpr->base.param[pExpr->base.numOfParams];
+
+      pVariant->i64   = colId;
+      pVariant->nType = TSDB_DATA_TYPE_BIGINT;
+      pVariant->nLen  = sizeof(int64_t);
+
+      pExpr->base.numOfParams++;
     }
 
     if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
@@ -716,8 +737,15 @@ int32_t tagValCompar(const void* p1, const void* p2) {
   const STidTags* t1 = (const STidTags*) varDataVal(p1);
   const STidTags* t2 = (const STidTags*) varDataVal(p2);
 
-  __compar_fn_t func = getComparFunc(t1->padding, 0);
+  if (t1->padding == TSDB_DATA_TYPE_JSON){
+    bool canReturn = true;
+    int32_t result = jsonCompareUnit(t1->tag, t2->tag, &canReturn);
+    if(canReturn) return result;
 
+    __compar_fn_t func = getComparFunc(t1->tag[0], 0);
+    return func(t1->tag + CHAR_BYTES, t2->tag + CHAR_BYTES);
+  }
+  __compar_fn_t func = getComparFunc(t1->padding, 0);
   return func(t1->tag, t2->tag);
 }
 
@@ -747,10 +775,11 @@ void tscBuildVgroupTableInfo(SSqlObj* pSql, STableMetaInfo* pTableMetaInfo, SArr
       SVgroupTableInfo info = {{0}};
       for (int32_t m = 0; m < pvg->numOfVgroups; ++m) {
         if (tt->vgId == pvg->vgroups[m].vgId) {
-          tscSVgroupInfoCopy(&info.vgInfo, &pvg->vgroups[m]);
+          memcpy(&info.vgInfo, &pvg->vgroups[m], sizeof(info.vgInfo));
           break;
         }
       }
+
       assert(info.vgInfo.numOfEps != 0);
 
       vgTables = taosArrayInit(4, sizeof(STableIdInfo));
@@ -775,7 +804,7 @@ void tscBuildVgroupTableInfo(SSqlObj* pSql, STableMetaInfo* pTableMetaInfo, SArr
   
   if (taosArrayGetSize(result) <= 0) {
     pTableMetaInfo->pVgroupTables = NULL;
-    taosArrayDestroy(result);
+    taosArrayDestroy(&result);
   } else {
     pTableMetaInfo->pVgroupTables = result;
 
@@ -807,16 +836,21 @@ static void issueTsCompQuery(SSqlObj* pSql, SJoinSupporter* pSupporter, SSqlObj*
   SSchema colSchema = {.type = TSDB_DATA_TYPE_BINARY, .bytes = 1};
   
   SColumnIndex index = {0, PRIMARYKEY_TIMESTAMP_COL_INDEX};
-  tscAddFuncInSelectClause(pQueryInfo, 0, TSDB_FUNC_TS_COMP, &index, &colSchema, TSDB_COL_NORMAL, getNewResColId(pCmd));
+  SExprInfo *pExpr = tscAddFuncInSelectClause(pQueryInfo, 0, TSDB_FUNC_TS_COMP, &index, &colSchema, TSDB_COL_NORMAL, getNewResColId(pCmd));
   
   // set the tags value for ts_comp function
   if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
-    SExprInfo *pExpr = tscExprGet(pQueryInfo, 0);
-    int16_t tagColId = tscGetJoinTagColIdByUid(&pSupporter->tagCond, pTableMetaInfo->pTableMeta->id.uid);
-    pExpr->base.param[0].i64 = tagColId;
-    pExpr->base.param[0].nLen = sizeof(int64_t);
-    pExpr->base.param[0].nType = TSDB_DATA_TYPE_BIGINT;
-    pExpr->base.numOfParams = 1;
+      pExpr->base.numOfParams = 0;    // the value is 0 by default. just make sure.
+      // add json tag key, if there is no json tag key, just hold place.
+      tVariantCreateFromBinary(&(pExpr->base.param[pExpr->base.numOfParams]), pSupporter->tagCond.joinInfo.joinTables[0]->tagJsonKeyName,
+                               strlen(pSupporter->tagCond.joinInfo.joinTables[0]->tagJsonKeyName), TSDB_DATA_TYPE_BINARY);
+      pExpr->base.numOfParams++;
+
+      int16_t tagColId = tscGetJoinTagColIdByUid(&pSupporter->tagCond, pTableMetaInfo->pTableMeta->id.uid);
+      pExpr->base.param[pExpr->base.numOfParams].i64 = tagColId;
+      pExpr->base.param[pExpr->base.numOfParams].nLen = sizeof(int64_t);
+      pExpr->base.param[pExpr->base.numOfParams].nType = TSDB_DATA_TYPE_BIGINT;
+      pExpr->base.numOfParams++;
   }
 
   // add the filter tag column
@@ -860,6 +894,40 @@ static bool checkForDuplicateTagVal(SSchema* pColSchema, SJoinSupporter* p1, SSq
   return true;
 }
 
+
+bool tscReparseSql(SSqlObj *sql, int32_t code){
+  if (!((code == TSDB_CODE_TDB_INVALID_TABLE_ID || code == TSDB_CODE_VND_INVALID_VGROUP_ID) && sql->retry < sql->maxRetry)) {
+    return true;
+  }
+
+  tscFreeSubobj(sql);      
+  tfree(sql->pSubs);
+
+  sql->res.code = TSDB_CODE_SUCCESS;
+  sql->retry++;
+  
+  tscDebug("0x%"PRIx64" retry parse sql and send query, prev error: %s, retry:%d", sql->self,
+      tstrerror(code), sql->retry);
+  
+  tscResetSqlCmd(&sql->cmd, true, sql->self);
+  code = tsParseSql(sql, true);
+  if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
+    return false;
+  }
+  
+  if (code != TSDB_CODE_SUCCESS) {
+    sql->res.code = code;
+    tscAsyncResultOnError(sql);
+    return false;
+  }
+  
+  SQueryInfo* pQueryInfo = tscGetQueryInfo(&sql->cmd);
+  executeQuery(sql, pQueryInfo);
+
+  return false;
+}
+
+
 static void setTidTagType(SJoinSupporter* p, uint8_t type) {
   for (int32_t i = 0; i < p->num; ++i) {
     STidTags * tag = (STidTags*) varDataVal(p->pIdTagList + i * p->tagSize);
@@ -899,7 +967,7 @@ static int32_t getIntersectionOfTableTuple(SQueryInfo* pQueryInfo, SSqlObj* pPar
 
     if (!checkForDuplicateTagVal(pColSchema, p, pParentSql)) {
       for (int32_t j = 0; j <= i; j++) {
-        taosArrayDestroy(ctxlist[j].res);
+        taosArrayDestroy(&ctxlist[j].res);
       }
       return TSDB_CODE_QRY_DUP_JOIN_KEY;
     }
@@ -1085,7 +1153,10 @@ bool emptyTagList(SArray* resList, int32_t size) {
 static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRows) {
   SJoinSupporter* pSupporter = (SJoinSupporter*)param;
 
-  SSqlObj* pParentSql = pSupporter->pObj;
+  int64_t handle = pSupporter->pObj;
+
+  SSqlObj* pParentSql = (SSqlObj*)taosAcquireRef(tscObjRef, handle);
+  if (pParentSql == NULL) return;
 
   SSqlObj* pSql = (SSqlObj*)tres;
   SSqlCmd* pCmd = &pSql->cmd;
@@ -1099,12 +1170,15 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
     tscError("0x%"PRIx64" abort query due to other subquery failure. code:%d, global code:%d", pSql->self, numOfRows, pParentSql->res.code);
     if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
 
     tscAsyncResultOnError(pParentSql);
-
-    return;
+    goto _return;
   }
 
   // check for the error code firstly
@@ -1116,11 +1190,15 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
 
     pParentSql->res.code = numOfRows;
     if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
 
     tscAsyncResultOnError(pParentSql);
-    return;
+    goto _return;
   }
 
   // keep the results in memory
@@ -1135,11 +1213,11 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
 
       pParentSql->res.code = TAOS_SYSTEM_ERROR(errno);
       if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-        return;
+        goto _return;
       }
 
       tscAsyncResultOnError(pParentSql);
-      return;
+      goto _return;
     }
 
     pSupporter->pIdTagList = tmp;
@@ -1151,7 +1229,7 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     // query not completed, continue to retrieve tid + tag tuples
     if (!pRes->completed) {
       taos_fetch_rows_a(tres, tidTagRetrieveCallback, param);
-      return;
+      goto _return;
     }
   }
 
@@ -1173,14 +1251,14 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     // set the callback function
     pSql->fp = tscJoinQueryCallback;
     tscBuildAndSendRequest(pSql, NULL);
-    return;
+    goto _return;
   }
 
   // no data exists in next vnode, mark the <tid, tags> query completed
   // only when there is no subquery exits any more, proceeds to get the intersect of the <tid, tags> tuple sets.
   if (!subAndCheckDone(pSql, pParentSql, pSupporter->subqueryIndex)) {
     //tscDebug("0x%"PRIx64" tagRetrieve:%p,%d completed, total:%d", pParentSql->self, tres, pSupporter->subqueryIndex, pParentSql->subState.numOfSub);
-    return;
+    goto _return;
   }  
 
   SArray* resList = taosArrayInit(pParentSql->subState.numOfSub, sizeof(SArray *));
@@ -1191,8 +1269,8 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     pParentSql->res.code = code;
     tscAsyncResultOnError(pParentSql);
 
-    taosArrayDestroy(resList);
-    return;
+    taosArrayDestroy(&resList);
+    goto _return;
   }
 
   if (emptyTagList(resList, pParentSql->subState.numOfSub)) {  // no results,return.
@@ -1231,17 +1309,23 @@ static void tidTagRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
   for (int32_t i = 0; i < rsize; ++i) {
     SArray** s = taosArrayGet(resList, i);
     if (*s) {
-      taosArrayDestroy(*s);
+      taosArrayDestroy(s);
     }
   }
 
-  taosArrayDestroy(resList);
+  taosArrayDestroy(&resList);
+
+_return:
+  taosReleaseRef(tscObjRef, handle);
 }
 
 static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRows) {
   SJoinSupporter* pSupporter = (SJoinSupporter*)param;
 
-  SSqlObj* pParentSql = pSupporter->pObj;
+  int64_t handle = pSupporter->pObj;
+
+  SSqlObj* pParentSql = (SSqlObj*)taosAcquireRef(tscObjRef, handle);
+  if (pParentSql == NULL) return;
 
   SSqlObj* pSql = (SSqlObj*)tres;
   SSqlCmd* pCmd = &pSql->cmd;
@@ -1253,12 +1337,16 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
     tscError("0x%"PRIx64" abort query due to other subquery failure. code:%d, global code:%d", pSql->self, numOfRows, pParentSql->res.code);
     if (quitAllSubquery(pSql, pParentSql, pSupporter)){
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
 
     tscAsyncResultOnError(pParentSql);
 
-    return;
+    goto _return;
   }
 
   // check for the error code firstly
@@ -1269,11 +1357,15 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
 
     pParentSql->res.code = numOfRows;
     if (quitAllSubquery(pSql, pParentSql, pSupporter)){
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
 
     tscAsyncResultOnError(pParentSql);
-    return;
+    goto _return;
   }
 
   if (numOfRows > 0) {  // write the compressed timestamp to disk file
@@ -1285,12 +1377,12 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
         pParentSql->res.code = TAOS_SYSTEM_ERROR(errno);
 
         if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-          return;
+          goto _return;
         }
         
         tscAsyncResultOnError(pParentSql);
 
-        return;
+        goto _return;
       }
     }
       
@@ -1304,12 +1396,12 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
 
       pParentSql->res.code = TAOS_SYSTEM_ERROR(errno);
       if (quitAllSubquery(pSql, pParentSql, pSupporter)){
-        return;
+        goto _return;
       }
       
       tscAsyncResultOnError(pParentSql);
 
-      return;
+      goto _return;
     }
 
     if (pSupporter->pTSBuf == NULL) {
@@ -1328,7 +1420,7 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
       pRes->row = pRes->numOfRows;
 
       taos_fetch_rows_a(tres, tsCompRetrieveCallback, param);
-      return;
+      goto _return;
     }
   }
 
@@ -1346,7 +1438,11 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     pCmd->command = TSDB_SQL_SELECT;
     tscResetForNextRetrieve(&pSql->res);
 
-    assert(pSupporter->f == NULL);
+    if (pSupporter->f != NULL) {
+      fclose(pSupporter->f);
+      pSupporter->f = NULL;
+    }
+    
     taosGetTmpfilePath("ts-join", pSupporter->path);
     
     // TODO check for failure
@@ -1356,11 +1452,11 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     // set the callback function
     pSql->fp = tscJoinQueryCallback;
     tscBuildAndSendRequest(pSql, NULL);
-    return;
+    goto _return;
   }
 
   if (!subAndCheckDone(pSql, pParentSql, pSupporter->subqueryIndex)) {
-    return;
+    goto _return;
   }  
 
   tscDebug("0x%"PRIx64" all subquery retrieve ts complete, do ts block intersect", pParentSql->self);
@@ -1374,7 +1470,7 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
     // set no result command
     pParentSql->cmd.command = TSDB_SQL_RETRIEVE_EMPTY_RESULT;
     (*pParentSql->fp)(pParentSql->param, pParentSql, 0);
-    return;
+    goto _return;
   }
 
   // launch the query the retrieve actual results from vnode along with the filtered timestamp
@@ -1383,12 +1479,17 @@ static void tsCompRetrieveCallback(void* param, TAOS_RES* tres, int32_t numOfRow
 
   //update the vgroup that involved in real data query
   tscLaunchRealSubqueries(pParentSql);
+
+_return:
+  taosReleaseRef(tscObjRef, handle);  
 }
 
 static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfRows) {
   SJoinSupporter* pSupporter = (SJoinSupporter*)param;
+  int64_t handle = pSupporter->pObj;
 
-  SSqlObj* pParentSql = pSupporter->pObj;
+  SSqlObj* pParentSql = (SSqlObj*)taosAcquireRef(tscObjRef, handle);
+  if (pParentSql == NULL) return;
 
   SSqlObj* pSql = (SSqlObj*)tres;
   SSqlCmd* pCmd = &pSql->cmd;
@@ -1399,11 +1500,15 @@ static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfR
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
     tscError("0x%"PRIx64" abort query due to other subquery failure. code:%d, global code:%d", pSql->self, numOfRows, pParentSql->res.code);
     if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
     
     tscAsyncResultOnError(pParentSql);
-    return;
+    goto _return;
   }
 
   
@@ -1414,7 +1519,7 @@ static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfR
     tscError("0x%"PRIx64" retrieve failed, index:%d, code:%s", pSql->self, pSupporter->subqueryIndex, tstrerror(numOfRows));
 
     tscAsyncResultOnError(pParentSql);
-    return;
+    goto _return;
   }
 
   if (numOfRows >= 0) {
@@ -1440,7 +1545,7 @@ static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfR
       pSql->fp = tscJoinQueryCallback;
 
       tscBuildAndSendRequest(pSql, NULL);
-      return;
+      goto _return;
     } else {
       tscDebug("0x%"PRIx64" no result in current subquery anymore", pSql->self);
     }
@@ -1448,7 +1553,7 @@ static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfR
 
   if (!subAndCheckDone(pSql, pParentSql, pSupporter->subqueryIndex)) {
     //tscDebug("0x%"PRIx64" sub:0x%"PRIx64",%d completed, total:%d", pParentSql->self, pSql->self, pSupporter->subqueryIndex, pState->numOfSub);
-    return;
+    goto _return;
   }
 
   tscDebug("0x%"PRIx64" all %d secondary subqueries retrieval completed, code:%d", pSql->self, pState->numOfSub, pParentSql->res.code);
@@ -1486,6 +1591,9 @@ static void joinRetrieveFinalResCallback(void* param, TAOS_RES* tres, int numOfR
 
   // data has retrieved to client, build the join results
   tscBuildResFromSubqueries(pParentSql);
+
+_return:  
+  taosReleaseRef(tscObjRef, handle);
 }
 
 void tscFetchDatablockForSubquery(SSqlObj* pSql) {
@@ -1728,11 +1836,15 @@ void tscSetupOutputColumnIndex(SSqlObj* pSql) {
 //  tscFieldInfoUpdateOffset(pQueryInfo);
 }
 
+
 void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
   SSqlObj* pSql = (SSqlObj*)tres;
 
   SJoinSupporter* pSupporter = (SJoinSupporter*)param;
-  SSqlObj* pParentSql = pSupporter->pObj;
+  int64_t handle = pSupporter->pObj;
+
+  SSqlObj* pParentSql = (SSqlObj*)taosAcquireRef(tscObjRef, handle);
+  if (pParentSql == NULL) return;
   
   // There is only one subquery and table for each subquery.
   SQueryInfo* pQueryInfo = tscGetQueryInfo(&pSql->cmd);
@@ -1744,12 +1856,16 @@ void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
     tscError("0x%"PRIx64" abort query due to other subquery failure. code:%d, global code:%d", pSql->self, code, pParentSql->res.code);
     if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-      return;
+      goto _return;
     }
 
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
+    }
+    
     tscAsyncResultOnError(pParentSql);
 
-    return;
+    goto _return;
   }
 
   // TODO here retry is required, not directly returns to client
@@ -1760,12 +1876,16 @@ void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
     pParentSql->res.code = code;
 
     if (quitAllSubquery(pSql, pParentSql, pSupporter)) {
-      return;
+      goto _return;
+    }
+
+    if (!tscReparseSql(pParentSql->rootObj, pParentSql->res.code)) {
+      goto _return;
     }
     
     tscAsyncResultOnError(pParentSql);
 
-    return;
+    goto _return;
   }
 
   // retrieve <tid, tag> tuples from vnode
@@ -1773,7 +1893,7 @@ void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
     pSql->fp = tidTagRetrieveCallback;
     pSql->cmd.command = TSDB_SQL_FETCH;
     tscBuildAndSendRequest(pSql, NULL);
-    return;
+    goto _return;
   }
 
   // retrieve ts_comp info from vnode
@@ -1781,13 +1901,13 @@ void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
     pSql->fp = tsCompRetrieveCallback;
     pSql->cmd.command = TSDB_SQL_FETCH;
     tscBuildAndSendRequest(pSql, NULL);
-    return;
+    goto _return;
   }
 
   // In case of consequence query from other vnode, do not wait for other query response here.
   if (!(pTableMetaInfo->vgroupIndex > 0 && tscNonOrderedProjectionQueryOnSTable(pQueryInfo, 0))) {
     if (!subAndCheckDone(pSql, pParentSql, pSupporter->subqueryIndex)) {
-      return;
+      goto _return;
     }      
   }
 
@@ -1810,6 +1930,11 @@ void tscJoinQueryCallback(void* param, TAOS_RES* tres, int code) {
       tscAsyncResultOnError(pParentSql);
     }
   }
+
+
+_return:  
+  taosReleaseRef(tscObjRef, handle);
+  
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -1868,7 +1993,7 @@ int32_t tscCreateJoinSubquery(SSqlObj *pSql, int16_t tableIndex, SJoinSupporter 
 
     pNewQueryInfo->limit.limit = -1;
     pNewQueryInfo->limit.offset = 0;
-    taosArrayDestroy(pNewQueryInfo->pUpstream);
+    taosArrayDestroy(&pNewQueryInfo->pUpstream);
 
     pNewQueryInfo->order.orderColId = INT32_MIN;
 
@@ -1895,7 +2020,7 @@ int32_t tscCreateJoinSubquery(SSqlObj *pSql, int16_t tableIndex, SJoinSupporter 
 
       colIndex.columnIndex = tscGetTagColIndexById(pTableMetaInfo->pTableMeta, tagColId);
 
-      int16_t bytes = 0;
+      int32_t bytes = 0;
       int16_t type  = 0;
       int32_t inter = 0;
 
@@ -1907,27 +2032,23 @@ int32_t tscCreateJoinSubquery(SSqlObj *pSql, int16_t tableIndex, SJoinSupporter 
 
       // set get tags query type
       TSDB_QUERY_SET_TYPE(pNewQueryInfo->type, TSDB_QUERY_TYPE_TAG_FILTER_QUERY);
-      tscAddFuncInSelectClause(pNewQueryInfo, 0, TSDB_FUNC_TID_TAG, &colIndex, &s1, TSDB_COL_TAG, getNewResColId(pCmd));
+      SExprInfo* pExpr = tscAddFuncInSelectClause(pNewQueryInfo, 0, TSDB_FUNC_TID_TAG, &colIndex, &s1, TSDB_COL_TAG, getNewResColId(pCmd));
+      if(strlen(pTagCond->joinInfo.joinTables[0]->tagJsonKeyName) > 0){
+        tVariantCreateFromBinary(&(pExpr->base.param[pExpr->base.numOfParams]), pTagCond->joinInfo.joinTables[0]->tagJsonKeyName,
+           strlen(pTagCond->joinInfo.joinTables[0]->tagJsonKeyName), TSDB_DATA_TYPE_BINARY);
+        pExpr->base.numOfParams++;
+      }
       size_t numOfCols = taosArrayGetSize(pNewQueryInfo->colList);
   
       tscDebug(
-          "%p subquery:%p tableIndex:%d, vgroupIndex:%d, type:%d, transfer to tid_tag query to retrieve (tableId, tags), "
+          "0x%"PRIX64" subquery:0x%"PRIx64" tableIndex:%d, vgroupIndex:%d, type:%d, transfer to tid_tag query to retrieve (tableId, tags), "
           "exprInfo:%" PRIzu ", colList:%" PRIzu ", fieldsInfo:%d, tagIndex:%d, name:%s",
-          pSql, pNew, tableIndex, pTableMetaInfo->vgroupIndex, pNewQueryInfo->type, tscNumOfExprs(pNewQueryInfo),
+          pSql->self, pNew->self, tableIndex, pTableMetaInfo->vgroupIndex, pNewQueryInfo->type, tscNumOfExprs(pNewQueryInfo),
           numOfCols, pNewQueryInfo->fieldsInfo.numOfOutput, colIndex.columnIndex, tNameGetTableName(&pNewQueryInfo->pTableMetaInfo[0]->name));
     } else {
       SSchema      colSchema = {.type = TSDB_DATA_TYPE_BINARY, .bytes = 1};
       SColumnIndex colIndex = {0, PRIMARYKEY_TIMESTAMP_COL_INDEX};
       tscAddFuncInSelectClause(pNewQueryInfo, 0, TSDB_FUNC_TS_COMP, &colIndex, &colSchema, TSDB_COL_NORMAL, getNewResColId(pCmd));
-
-      // set the tags value for ts_comp function
-      SExprInfo *pExpr = tscExprGet(pNewQueryInfo, 0);
-
-      if (UTIL_TABLE_IS_SUPER_TABLE(pTableMetaInfo)) {
-        int16_t tagColId = tscGetJoinTagColIdByUid(&pSupporter->tagCond, pTableMetaInfo->pTableMeta->id.uid);
-        pExpr->base.param->i64 = tagColId;
-        pExpr->base.numOfParams = 1;
-      }
 
       // add the filter tag column
       if (pSupporter->colList != NULL) {
@@ -1946,9 +2067,9 @@ int32_t tscCreateJoinSubquery(SSqlObj *pSql, int16_t tableIndex, SJoinSupporter 
       size_t numOfCols = taosArrayGetSize(pNewQueryInfo->colList);
 
       tscDebug(
-          "%p subquery:%p tableIndex:%d, vgroupIndex:%d, type:%u, transfer to ts_comp query to retrieve timestamps, "
+          "0x%"PRIX64" subquery:0x%"PRIx64" tableIndex:%d, vgroupIndex:%d, type:%u, transfer to ts_comp query to retrieve timestamps, "
           "exprInfo:%" PRIzu ", colList:%" PRIzu ", fieldsInfo:%d, name:%s",
-          pSql, pNew, tableIndex, pTableMetaInfo->vgroupIndex, pNewQueryInfo->type, tscNumOfExprs(pNewQueryInfo),
+          pSql->self, pNew->self, tableIndex, pTableMetaInfo->vgroupIndex, pNewQueryInfo->type, tscNumOfExprs(pNewQueryInfo),
           numOfCols, pNewQueryInfo->fieldsInfo.numOfOutput, tNameGetTableName(&pNewQueryInfo->pTableMetaInfo[0]->name));
     }
   } else {
@@ -2038,17 +2159,14 @@ void tscHandleMasterJoinQuery(SSqlObj* pSql) {
   tscAsyncResultOnError(pSql);
 }
 
-static void doCleanupSubqueries(SSqlObj *pSql, int32_t numOfSubs) {
+void doCleanupSubqueries(SSqlObj *pSql, int32_t numOfSubs) {
   assert(numOfSubs <= pSql->subState.numOfSub && numOfSubs >= 0);
   
   for(int32_t i = 0; i < numOfSubs; ++i) {
     SSqlObj* pSub = pSql->pSubs[i];
     assert(pSub != NULL);
-    
-    SRetrieveSupport* pSupport = pSub->param;
-    
-    tfree(pSupport->localBuffer);
-    tfree(pSupport);
+
+    tscFreeRetrieveSup(&pSub->param);
     
     taos_free_result(pSub);
   }
@@ -2134,10 +2252,13 @@ void doAppendData(SInterResult* pInterResult, TAOS_ROW row, int32_t numOfCols, S
   }
 }
 
-static void destroySup(SFirstRoundQuerySup* pSup) {
-  taosArrayDestroyEx(pSup->pResult, freeInterResult);
-  taosArrayDestroy(pSup->pColsInfo);
-  tfree(pSup);
+static void tscFreeFirstRoundSup(void **param) {
+  if (*param) {
+    SFirstRoundQuerySup* pSup = (SFirstRoundQuerySup*)*param;
+    taosArrayDestroyEx(&pSup->pResult, freeInterResult);
+    taosArrayDestroy(&pSup->pColsInfo);
+    tfree(*param);
+  }
 }
 
 void tscFirstRoundRetrieveCallback(void* param, TAOS_RES* tres, int numOfRows) {
@@ -2151,8 +2272,10 @@ void tscFirstRoundRetrieveCallback(void* param, TAOS_RES* tres, int numOfRows) {
 
   int32_t code = taos_errno(pSql);
   if (code != TSDB_CODE_SUCCESS) {
-    destroySup(pSup);
+    tscFreeFirstRoundSup(&param);
     taos_free_result(pSql);
+    pParent->subState.numOfSub = 0;
+    tfree(pParent->pSubs);    
     pParent->res.code = code;
     tscAsyncResultOnError(pParent);
     return;
@@ -2186,7 +2309,15 @@ void tscFirstRoundRetrieveCallback(void* param, TAOS_RES* tres, int numOfRows) {
             if (row[i] == NULL) {
               setNull(p + offset, pExpr->base.resType, pExpr->base.resBytes);
             } else {
-              memcpy(p + offset, row[i], length[i]);
+              if(pExpr->base.resType == TSDB_DATA_TYPE_NCHAR){
+                int32_t output = 0;
+                bool ret = taosMbsToUcs4(row[i], length[i], p + offset, pExpr->base.resBytes, &output);
+                if (!ret) {
+                  tscError("stddev convert tag error:%d", ret);
+                }
+              }else{
+                memcpy(p + offset, row[i], length[i]);
+              }
             }
             offset += pExpr->base.resBytes;
           }
@@ -2244,11 +2375,11 @@ void tscFirstRoundRetrieveCallback(void* param, TAOS_RES* tres, int numOfRows) {
     tbufCloseWriter(&bw);
   }
 
-  taosArrayDestroyEx(pSup->pResult, freeInterResult);
-  taosArrayDestroy(pSup->pColsInfo);
-  tfree(pSup);
+  tscFreeFirstRoundSup(&param);
 
   taos_free_result(pSql);
+  pParent->subState.numOfSub = 0;
+  tfree(pParent->pSubs);    
 
   if (resRows == 0) {
     pParent->cmd.command = TSDB_SQL_RETRIEVE_EMPTY_RESULT;
@@ -2269,9 +2400,11 @@ void tscFirstRoundCallback(void* param, TAOS_RES* tres, int code) {
   if (c != TSDB_CODE_SUCCESS) {
     SSqlObj* parent = pSup->pParent;
 
-    destroySup(pSup);
+    tscFreeFirstRoundSup(&param);
     taos_free_result(pSql);
-    parent->res.code = code;
+    parent->subState.numOfSub = 0;
+    tfree(parent->pSubs);
+    parent->res.code = c;
     tscAsyncResultOnError(parent);
     return;
   }
@@ -2293,6 +2426,10 @@ int32_t tscHandleFirstRoundStableQuery(SSqlObj *pSql) {
   SSqlObj *pNew = createSubqueryObj(pSql, 0, tscFirstRoundCallback, pSup, TSDB_SQL_SELECT, NULL);
   SSqlCmd *pCmd = &pNew->cmd;
 
+  pNew->freeParam = tscFreeFirstRoundSup;
+
+  tscDebug("%"PRIx64 " add first round supporter:%p", pNew->self, pSup);
+
   SQueryInfo* pNewQueryInfo = tscGetQueryInfo(pCmd);
   assert(pQueryInfo->numOfTables == 1);
 
@@ -2306,6 +2443,7 @@ int32_t tscHandleFirstRoundStableQuery(SSqlObj *pSql) {
   STableMetaInfo* pTableMetaInfo = tscGetMetaInfo(pNewQueryInfo, 0);
 
   tscInitQueryInfo(pNewQueryInfo);
+  pNewQueryInfo->isStddev = true;     // for json tag
 
   // add the group cond
   pNewQueryInfo->groupbyExpr = pQueryInfo->groupbyExpr;
@@ -2369,6 +2507,10 @@ int32_t tscHandleFirstRoundStableQuery(SSqlObj *pSql) {
       }
 
       SExprInfo* p = tscAddFuncInSelectClause(pNewQueryInfo, index++, TSDB_FUNC_TAG, &colIndex, schema, TSDB_COL_TAG, getNewResColId(pCmd));
+      if (schema->type == TSDB_DATA_TYPE_JSON){
+        p->base.numOfParams = pExpr->base.numOfParams;
+        tVariantAssign(&p->base.param[0], &pExpr->base.param[0]);
+      }
       p->base.resColId = pExpr->base.resColId;
     } else if (pExpr->base.functionId == TSDB_FUNC_PRJ) {
       int32_t num = (int32_t) taosArrayGetSize(pNewQueryInfo->groupbyExpr.columnInfo);
@@ -2406,6 +2548,10 @@ int32_t tscHandleFirstRoundStableQuery(SSqlObj *pSql) {
         } else {
           SSchema ss = {.type = (uint8_t)pCol->info.type, .bytes = pCol->info.bytes, .colId = (int16_t)pCol->columnIndex};
           tscColumnListInsert(pNewQueryInfo->colList, pCol->columnIndex, pCol->tableUid, &ss);
+          int32_t ti = tscColumnExists(pNewQueryInfo->colList, pCol->columnIndex, pCol->tableUid);
+          assert(ti >= 0);
+          SColumn* x = taosArrayGetP(pNewQueryInfo->colList, ti);
+          tscColumnCopy(x, pCol);
         }
       }
     }
@@ -2422,11 +2568,21 @@ int32_t tscHandleFirstRoundStableQuery(SSqlObj *pSql) {
       pSql->self, pNew->self, 0, pTableMetaInfo->vgroupIndex, pTableMetaInfo->vgroupList->numOfVgroups, pNewQueryInfo->type,
       tscNumOfExprs(pNewQueryInfo), index+1, pNewQueryInfo->fieldsInfo.numOfOutput, tNameGetTableName(&pTableMetaInfo->name));
 
+  pSql->pSubs = calloc(1, POINTER_BYTES);
+  if (pSql->pSubs == NULL) {
+    terrno = TSDB_CODE_TSC_OUT_OF_MEMORY;
+    goto _error;
+  }
+
+  pSql->subState.numOfSub = 1;
+
+  pSql->pSubs[0] = pNew;
+
   tscHandleMasterSTableQuery(pNew);
   return TSDB_CODE_SUCCESS;
 
   _error:
-  destroySup(pSup);
+  tscFreeFirstRoundSup((void**)&pSup);
   taos_free_result(pNew);
   pSql->res.code = terrno;
   tscAsyncResultOnError(pSql);
@@ -2442,7 +2598,11 @@ static void doSendQueryReqs(SSchedMsg* pSchedMsg) {
   SSqlObj* pSql = pSchedMsg->ahandle;
   SPair* p = pSchedMsg->msg;
 
-  for(int32_t i = p->first; i < p->second; ++i) {
+  for (int32_t i = p->first; i < p->second; ++i) {
+   if (i >= pSql->subState.numOfSub) {
+      tfree(p);
+      return;
+    }
     SSqlObj* pSub = pSql->pSubs[i];
     SRetrieveSupport* pSupport = pSub->param;
 
@@ -2453,11 +2613,48 @@ static void doSendQueryReqs(SSchedMsg* pSchedMsg) {
   tfree(p);
 }
 
+static void doConcurrentlySendSubQueries(SSqlObj* pSql) {
+  SSubqueryState *pState = &pSql->subState;
+
+  // concurrently sent the query requests.
+  const int32_t MAX_REQUEST_PER_TASK = 4;
+
+  int32_t numOfTasks = (pState->numOfSub + MAX_REQUEST_PER_TASK - 1)/MAX_REQUEST_PER_TASK;
+  assert(numOfTasks >= 1);
+
+  int32_t num;
+  if (pState->numOfSub / numOfTasks == MAX_REQUEST_PER_TASK) {
+    num = MAX_REQUEST_PER_TASK;
+  } else {
+    num = pState->numOfSub / numOfTasks + 1;
+  }
+  tscDebug("0x%"PRIx64 " query will be sent by %d threads", pSql->self, numOfTasks);
+
+  for(int32_t j = 0; j < numOfTasks; ++j) {
+    SSchedMsg schedMsg = {0};
+    schedMsg.fp      = doSendQueryReqs;
+    schedMsg.ahandle = (void*)pSql;
+
+    schedMsg.thandle = NULL;
+    SPair* p = calloc(1, sizeof(SPair));
+    p->first  = j * num;
+
+    if (j == numOfTasks - 1) {
+      p->second = pState->numOfSub;
+    } else {
+      p->second = (j + 1) * num;
+    }
+
+    schedMsg.msg = p;
+    taosScheduleTask(tscQhandle, &schedMsg);
+  }
+}
+
 int32_t tscHandleMasterSTableQuery(SSqlObj *pSql) {
   SSqlRes *pRes = &pSql->res;
   SSqlCmd *pCmd = &pSql->cmd;
   
-  // pRes->code check only serves in launching metric sub-queries
+  // pRes->code check only serves in launching super table sub-queries
   if (pRes->code == TSDB_CODE_TSC_QUERY_CANCELLED) {
     pCmd->command = TSDB_SQL_RETRIEVE_GLOBALMERGE;  // enable the abort of kill super table function.
     return pRes->code;
@@ -2468,22 +2665,23 @@ int32_t tscHandleMasterSTableQuery(SSqlObj *pSql) {
 
   pRes->qId = 0x1;  // hack the qhandle check
 
-  const uint32_t nBufferSize = (1u << 18u);  // 256KB
+  uint32_t nBufferSize = (1u << 18u);  // 256KB, default buffer size
 
   SQueryInfo     *pQueryInfo = tscGetQueryInfo(pCmd);
   STableMetaInfo *pTableMetaInfo = tscGetMetaInfo(pQueryInfo, 0);
+
   SSubqueryState *pState = &pSql->subState;
 
-  pState->numOfSub = 0;
-  if (pTableMetaInfo->pVgroupTables == NULL) {
-    pState->numOfSub = pTableMetaInfo->vgroupList->numOfVgroups;
-  } else {
-    pState->numOfSub = (int32_t)taosArrayGetSize(pTableMetaInfo->pVgroupTables);
+  int32_t numOfSub = (pTableMetaInfo->pVgroupTables == NULL) ? pTableMetaInfo->vgroupList->numOfVgroups
+                                                             : (int32_t)taosArrayGetSize(pTableMetaInfo->pVgroupTables);
+
+  int32_t ret = doInitSubState(pSql, numOfSub);
+  if (ret != 0) {
+    tscAsyncResultOnError(pSql);
+    return ret;
   }
 
-  assert(pState->numOfSub > 0);
-  
-  int32_t ret = tscCreateGlobalMergerEnv(pQueryInfo, &pMemoryBuf, pSql->subState.numOfSub, &pDesc, nBufferSize, pSql->self);
+  ret = tscCreateGlobalMergerEnv(pQueryInfo, &pMemoryBuf, pSql->subState.numOfSub, &pDesc, &nBufferSize, pSql->self);
   if (ret != 0) {
     pRes->code = ret;
     tscAsyncResultOnError(pSql);
@@ -2493,32 +2691,6 @@ int32_t tscHandleMasterSTableQuery(SSqlObj *pSql) {
   }
 
   tscDebug("0x%"PRIx64" retrieved query data from %d vnode(s)", pSql->self, pState->numOfSub);
-  pSql->pSubs = calloc(pState->numOfSub, POINTER_BYTES);
-  if (pSql->pSubs == NULL) {
-    tfree(pSql->pSubs);
-    pRes->code = TSDB_CODE_TSC_OUT_OF_MEMORY;
-    tscDestroyGlobalMergerEnv(pMemoryBuf, pDesc,pState->numOfSub);
-
-    tscAsyncResultOnError(pSql);
-    return ret;
-  }
-
-  if (pState->states == NULL) {
-    pState->states = calloc(pState->numOfSub, sizeof(*pState->states));
-    if (pState->states == NULL) {
-      pRes->code = TSDB_CODE_TSC_OUT_OF_MEMORY;
-      tscDestroyGlobalMergerEnv(pMemoryBuf, pDesc,pState->numOfSub);
-
-      tscAsyncResultOnError(pSql);
-      return ret;
-    }
-
-    pthread_mutex_init(&pState->mutex, NULL);
-  }
-
-  memset(pState->states, 0, sizeof(*pState->states) * pState->numOfSub);
-  tscDebug("0x%"PRIx64" reset all sub states to 0", pSql->self);
-  
   pRes->code = TSDB_CODE_SUCCESS;
   
   int32_t i = 0;
@@ -2533,14 +2705,16 @@ int32_t tscHandleMasterSTableQuery(SSqlObj *pSql) {
     trs->pOrderDescriptor = pDesc;
 
     trs->localBuffer = (tFilePage *)calloc(1, nBufferSize + sizeof(tFilePage));
+    trs->localBufferSize = nBufferSize + sizeof(tFilePage);
     if (trs->localBuffer == NULL) {
       tscError("0x%"PRIx64" failed to malloc buffer for local buffer, orderOfSub:%d, reason:%s", pSql->self, i, strerror(errno));
       tfree(trs);
       break;
     }
-    
-    trs->subqueryIndex  = i;
-    trs->pParentSql     = pSql;
+
+    trs->localBuffer->num = 0;
+    trs->subqueryIndex = i;
+    trs->pParentSql    = pSql;
 
     SSqlObj *pNew = tscCreateSTableSubquery(pSql, trs, NULL);
     if (pNew == NULL) {
@@ -2576,47 +2750,21 @@ int32_t tscHandleMasterSTableQuery(SSqlObj *pSql) {
     return pRes->code;
   }
 
-  // concurrently sent the query requests.
-  const int32_t MAX_REQUEST_PER_TASK = 8;
-
-  int32_t numOfTasks = (pState->numOfSub + MAX_REQUEST_PER_TASK - 1)/MAX_REQUEST_PER_TASK;
-  assert(numOfTasks >= 1);
-
-  int32_t num = (pState->numOfSub/numOfTasks) + 1;
-  tscDebug("0x%"PRIx64 " query will be sent by %d threads", pSql->self, numOfTasks);
-
-  for(int32_t j = 0; j < numOfTasks; ++j) {
-    SSchedMsg schedMsg = {0};
-    schedMsg.fp      = doSendQueryReqs;
-    schedMsg.ahandle = (void*)pSql;
-
-    schedMsg.thandle = NULL;
-    SPair* p = calloc(1, sizeof(SPair));
-    p->first  = j * num;
-
-    if (j == numOfTasks - 1) {
-      p->second = pState->numOfSub;
-    } else {
-      p->second = (j + 1) * num;
-    }
-
-    schedMsg.msg = p;
-    taosScheduleTask(tscQhandle, &schedMsg);
-  }
+  doConcurrentlySendSubQueries(pSql);
 
   return TSDB_CODE_SUCCESS;
 }
 
-static void tscFreeRetrieveSup(SSqlObj *pSql) {
-  SRetrieveSupport *trsupport = pSql->param;
+void tscFreeRetrieveSup(void **param) {
+  SRetrieveSupport *trsupport = *param;
 
-  void* p = atomic_val_compare_exchange_ptr(&pSql->param, trsupport, 0);
+  void* p = atomic_val_compare_exchange_ptr(param, trsupport, 0);
   if (p == NULL) {
-    tscDebug("0x%"PRIx64" retrieve supp already released", pSql->self);
+    tscDebug("retrieve supp already released");
     return;
   }
 
-  tscDebug("0x%"PRIx64" start to free subquery supp obj:%p", pSql->self, trsupport);
+  tscDebug("start to free subquery restrieve supp obj:%p", trsupport);
   tfree(trsupport->localBuffer);
   tfree(trsupport);
 }
@@ -2648,8 +2796,10 @@ static int32_t tscReissueSubquery(SRetrieveSupport *oriTrs, SSqlObj *pSql, int32
 
   memcpy(trsupport, oriTrs, sizeof(*trsupport));
 
-  const uint32_t nBufferSize = (1u << 16u);  // 64KB
-  trsupport->localBuffer = (tFilePage *)calloc(1, nBufferSize + sizeof(tFilePage));
+  // the buffer size should be the same as tscHandleMasterSTableQuery, which was used to initialize the SColumnModel
+  // the capacity member of SColumnModel will be used to save the trsupport->localBuffer in tscRetrieveFromDnodeCallBack
+  trsupport->localBuffer = (tFilePage *)calloc(1, oriTrs->localBufferSize);
+  
   if (trsupport->localBuffer == NULL) {
     tscError("0x%"PRIx64" failed to malloc buffer for local buffer, reason:%s", pSql->self, strerror(errno));
     tfree(trsupport);
@@ -2660,7 +2810,7 @@ static int32_t tscReissueSubquery(SRetrieveSupport *oriTrs, SSqlObj *pSql, int32
   int32_t  subqueryIndex = trsupport->subqueryIndex;
 
   STableMetaInfo* pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, 0);
-  SVgroupInfo* pVgroup = &pTableMetaInfo->vgroupList->vgroups[0];
+  SVgroupMsg* pVgroup = &pTableMetaInfo->vgroupList->vgroups[0];
 
   tExtMemBufferClear(trsupport->pExtMemBuffer[subqueryIndex]);
 
@@ -2687,12 +2837,12 @@ static int32_t tscReissueSubquery(SRetrieveSupport *oriTrs, SSqlObj *pSql, int32
   
   // if failed to process sql, let following code handle the pSql
   if (ret == TSDB_CODE_SUCCESS) {
-    tscFreeRetrieveSup(pSql);
+    tscFreeRetrieveSup(&pSql->param);
     taos_free_result(pSql);
     return ret;
   } else {    
     pParentSql->pSubs[trsupport->subqueryIndex] = pSql;
-    tscFreeRetrieveSup(pNew);
+    tscFreeRetrieveSup(&pNew->param);
     taos_free_result(pNew);
     return ret;
   }
@@ -2738,7 +2888,7 @@ void tscHandleSubqueryError(SRetrieveSupport *trsupport, SSqlObj *pSql, int numO
       }
     } else {  // reach the maximum retry count, abort
       atomic_val_compare_exchange_32(&pParentSql->res.code, TSDB_CODE_SUCCESS, numOfRows);
-      tscError("0x%"PRIx64" sub:0x%"PRIx64" retrieve failed,code:%s,orderOfSub:%d failed.no more retry,set global code:%s", pParentSql->self, pSql->self,
+      tscError("0x%"PRIx64" sub:0x%"PRIx64" retrieve failed, code:%s, orderOfSub:%d FAILED. no more retry, set global code:%s", pParentSql->self, pSql->self,
                tstrerror(numOfRows), subqueryIndex, tstrerror(pParentSql->res.code));
     }
   }
@@ -2747,7 +2897,7 @@ void tscHandleSubqueryError(SRetrieveSupport *trsupport, SSqlObj *pSql, int numO
     tscDebug("0x%"PRIx64" sub:0x%"PRIx64",%d freed, not finished, total:%d", pParentSql->self,
         pSql->self, trsupport->subqueryIndex, pState->numOfSub);
 
-    tscFreeRetrieveSup(pSql);
+    tscFreeRetrieveSup(&pSql->param);
     return;
   }  
   
@@ -2757,7 +2907,7 @@ void tscHandleSubqueryError(SRetrieveSupport *trsupport, SSqlObj *pSql, int numO
 
   // release allocated resource
   tscDestroyGlobalMergerEnv(trsupport->pExtMemBuffer, trsupport->pOrderDescriptor, pState->numOfSub);
-  tscFreeRetrieveSup(pSql);
+  tscFreeRetrieveSup(&pSql->param);
 
   // in case of second stage join subquery, invoke its callback function instead of regular QueueAsyncRes
   SQueryInfo *pQueryInfo = tscGetQueryInfo(&pParentSql->cmd);
@@ -2765,27 +2915,36 @@ void tscHandleSubqueryError(SRetrieveSupport *trsupport, SSqlObj *pSql, int numO
   if (!TSDB_QUERY_HAS_TYPE(pQueryInfo->type, TSDB_QUERY_TYPE_JOIN_SEC_STAGE)) {
 
     int32_t code = pParentSql->res.code;
-    if ((code == TSDB_CODE_TDB_INVALID_TABLE_ID || code == TSDB_CODE_VND_INVALID_VGROUP_ID) && pParentSql->retry < pParentSql->maxRetry) {
-      // remove the cached tableMeta and vgroup id list, and then parse the sql again
-      tscResetSqlCmd( &pParentSql->cmd, true, pParentSql->self);
+    SSqlObj *userSql = pParentSql->rootObj;
 
-      pParentSql->retry++;
-      pParentSql->res.code = TSDB_CODE_SUCCESS;
-      tscDebug("0x%"PRIx64" retry parse sql and send query, prev error: %s, retry:%d", pParentSql->self,
-          tstrerror(code), pParentSql->retry);
+    if ((code == TSDB_CODE_TDB_INVALID_TABLE_ID || code == TSDB_CODE_VND_INVALID_VGROUP_ID) && userSql->retry < userSql->maxRetry) {
+      if (userSql != pParentSql && pParentSql->freeParam != NULL) {
+        (*pParentSql->freeParam)(&pParentSql->param);
+      }
 
-      code = tsParseSql(pParentSql, true);
+      tscFreeSubobj(userSql);      
+      tfree(userSql->pSubs);
+
+      userSql->res.code = TSDB_CODE_SUCCESS;
+      userSql->retry++;
+
+      tscDebug("0x%"PRIx64" retry parse sql and send query, prev error: %s, retry:%d", userSql->self,
+          tstrerror(code), userSql->retry);
+
+      tscResetSqlCmd(&userSql->cmd, true, userSql->self);
+      code = tsParseSql(userSql, true);
       if (code == TSDB_CODE_TSC_ACTION_IN_PROGRESS) {
         return;
       }
 
       if (code != TSDB_CODE_SUCCESS) {
-        pParentSql->res.code = code;
-        tscAsyncResultOnError(pParentSql);
+        userSql->res.code = code;
+        tscAsyncResultOnError(userSql);
         return;
       }
 
-      executeQuery(pParentSql, pQueryInfo);
+      pQueryInfo = tscGetQueryInfo(&userSql->cmd);
+      executeQuery(userSql, pQueryInfo);
     } else {
       (*pParentSql->fp)(pParentSql->param, pParentSql, pParentSql->res.code);
     }
@@ -2844,7 +3003,7 @@ static void tscAllDataRetrievedFromDnode(SRetrieveSupport *trsupport, SSqlObj* p
     tscDebug("0x%"PRIx64" sub:0x%"PRIx64" orderOfSub:%d freed, not finished", pParentSql->self, pSql->self,
         trsupport->subqueryIndex);
 
-    tscFreeRetrieveSup(pSql);
+    tscFreeRetrieveSup(&pSql->param);
     return;
   }  
   
@@ -2855,7 +3014,6 @@ static void tscAllDataRetrievedFromDnode(SRetrieveSupport *trsupport, SSqlObj* p
       pParentSql->self, pState->numOfSub, pState->numOfRetrievedRows);
   
   SQueryInfo *pPQueryInfo = tscGetQueryInfo(&pParentSql->cmd);
-  tscClearInterpInfo(pPQueryInfo);
   
   code = tscCreateGlobalMerger(trsupport->pExtMemBuffer, pState->numOfSub, pDesc, pPQueryInfo, &pParentSql->res.pMerger, pParentSql->self);
   pParentSql->res.code = code;
@@ -2873,9 +3031,8 @@ static void tscAllDataRetrievedFromDnode(SRetrieveSupport *trsupport, SSqlObj* p
   pParentSql->res.precision = pSql->res.precision;
   pParentSql->res.numOfRows = 0;
   pParentSql->res.row = 0;
-  pParentSql->res.numOfGroups = 0;
 
-  tscFreeRetrieveSup(pSql);
+  tscFreeRetrieveSup(&pSql->param);
 
   // set the command flag must be after the semaphore been correctly set.
   if (pParentSql->cmd.command != TSDB_SQL_RETRIEVE_EMPTY_RESULT) {
@@ -2924,7 +3081,7 @@ static void tscRetrieveFromDnodeCallBack(void *param, TAOS_RES *tres, int numOfR
   SSubqueryState* pState = &pParentSql->subState;
   
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, 0);
-  SVgroupInfo  *pVgroup = &pTableMetaInfo->vgroupList->vgroups[0];
+  SVgroupMsg  *pVgroup = &pTableMetaInfo->vgroupList->vgroups[0];
 
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
     trsupport->numOfRetry = MAX_NUM_OF_SUBQUERY_RETRY;
@@ -2970,7 +3127,7 @@ static void tscRetrieveFromDnodeCallBack(void *param, TAOS_RES *tres, int numOfR
     tscDebug("0x%"PRIx64" sub:0x%"PRIx64" retrieve numOfRows:%d totalNumOfRows:%" PRIu64 " from ep:%s, orderOfSub:%d",
         pParentSql->self, pSql->self, pRes->numOfRows, pState->numOfRetrievedRows, pSql->epSet.fqdn[pSql->epSet.inUse], idx);
 
-    if (num > tsMaxNumOfOrderedResults && /*tscIsProjectionQueryOnSTable(pQueryInfo, 0) &&*/ !(tscGetQueryInfo(&pParentSql->cmd)->distinct)) {
+    if (num > tsMaxNumOfOrderedResults && tscIsProjectionQueryOnSTable(pQueryInfo, 0) && !(tscGetQueryInfo(&pParentSql->cmd)->distinct)) {
       tscError("0x%"PRIx64" sub:0x%"PRIx64" num of OrderedRes is too many, max allowed:%" PRId32 " , current:%" PRId64,
                pParentSql->self, pSql->self, tsMaxNumOfOrderedResults, num);
       tscAbortFurtherRetryRetrieval(trsupport, tres, TSDB_CODE_TSC_SORTED_RES_TOO_MANY);
@@ -3052,7 +3209,7 @@ void tscRetrieveDataRes(void *param, TAOS_RES *tres, int code) {
   assert(pQueryInfo->numOfTables == 1);
   
   STableMetaInfo *pTableMetaInfo = tscGetTableMetaInfoFromCmd(&pSql->cmd, 0);
-  SVgroupInfo* pVgroup = &pTableMetaInfo->vgroupList->vgroups[trsupport->subqueryIndex];
+  SVgroupMsg* pVgroup = &pTableMetaInfo->vgroupList->vgroups[trsupport->subqueryIndex];
 
   // stable query killed or other subquery failed, all query stopped
   if (pParentSql->res.code != TSDB_CODE_SUCCESS) {
@@ -3203,7 +3360,7 @@ static void multiVnodeInsertFinalize(void* param, TAOS_RES* tres, int numOfRows)
     for(int32_t i = 0; i < pParentObj->cmd.insertParam.numOfTables; ++i) {
       char name[TSDB_TABLE_FNAME_LEN] = {0};
       tNameExtractFullName(pParentObj->cmd.insertParam.pTableNameList[i], name);
-      taosHashRemove(tscTableMetaMap, name, strnlen(name, TSDB_TABLE_FNAME_LEN));
+      taosHashRemove(UTIL_GET_TABLEMETA(pParentObj), name, strnlen(name, TSDB_TABLE_FNAME_LEN));
     }
 
     pParentObj->res.code = TSDB_CODE_SUCCESS;
@@ -3348,7 +3505,7 @@ int32_t tscHandleMultivnodeInsert(SSqlObj *pSql) {
     goto _error;
   }
 
-  pCmd->insertParam.pDataBlocks = tscDestroyBlockArrayList(pCmd->insertParam.pDataBlocks);
+  pCmd->insertParam.pDataBlocks = tscDestroyBlockArrayList(pSql, pCmd->insertParam.pDataBlocks);
 
   // use the local variable
   for (int32_t j = 0; j < numOfSub; ++j) {
@@ -3394,11 +3551,11 @@ static void doBuildResFromSubqueries(SSqlObj* pSql) {
   }
 
   if (numOfRes == 0) {  // no result any more, free all subquery objects
+    pSql->res.completed = true;
     freeJoinSubqueryObj(pSql);
     return;
   }
 
-//  tscRestoreFuncForSTableQuery(pQueryInfo);
   int32_t rowSize = tscGetResRowLength(pQueryInfo->exprList);
 
   assert(numOfRes * rowSize > 0);
@@ -3440,6 +3597,8 @@ static void doBuildResFromSubqueries(SSqlObj* pSql) {
     char* pData = getResultBlockPosition(pCmd1, pRes1, pIndex->columnIndex, &bytes);
     memcpy(data, pData, bytes * numOfRes);
 
+    pRes->dataConverted = pRes1->dataConverted;
+
     data += bytes * numOfRes;
   }
 
@@ -3462,10 +3621,10 @@ static void doBuildResFromSubqueries(SSqlObj* pSql) {
     finalRowSize += pField->bytes;
   }
 
-  doArithmeticCalculate(pQueryInfo, pFilePage, rowSize, finalRowSize);
+  doScalarExprCalculate(pQueryInfo, pFilePage, rowSize, finalRowSize);
 
   pRes->data = pFilePage->data;
-  tscSetResRawPtr(pRes, pQueryInfo);
+  tscSetResRawPtr(pRes, pQueryInfo, pRes->dataConverted);
 }
 
 void tscBuildResFromSubqueries(SSqlObj *pSql) {
@@ -3501,8 +3660,8 @@ void tscBuildResFromSubqueries(SSqlObj *pSql) {
   }
 }
 
-char *getArithmeticInputSrc(void *param, const char *name, int32_t colId) {
-  SArithmeticSupport *pSupport = (SArithmeticSupport *) param;
+char * getScalarExprInputSrc(void *param, const char *name, int32_t colId) {
+  SScalarExprSupport*pSupport = (SScalarExprSupport*) param;
 
   int32_t index = -1;
   SExprInfo* pExpr = NULL;
@@ -3543,7 +3702,9 @@ TAOS_ROW doSetResultRowData(SSqlObj *pSql) {
     int32_t type  = pInfo->field.type;
     int32_t bytes = pInfo->field.bytes;
 
-    if (type != TSDB_DATA_TYPE_BINARY && type != TSDB_DATA_TYPE_NCHAR) {
+    if (pQueryInfo->isStddev && type == TSDB_DATA_TYPE_JSON){  // for json tag compare in the second round of stddev
+      pRes->tsrow[j] = pRes->urow[i];
+    }else if (!IS_VAR_DATA_TYPE(type) && type != TSDB_DATA_TYPE_JSON) {
       pRes->tsrow[j] = isNull(pRes->urow[i], type) ? NULL : pRes->urow[i];
     } else {
       pRes->tsrow[j] = isNull(pRes->urow[i], type) ? NULL : varDataVal(pRes->urow[i]);
@@ -3611,6 +3772,25 @@ static UNUSED_FUNC bool tscHasRemainDataInSubqueryResultSet(SSqlObj *pSql) {
   
   return hasData;
 }
+
+
+void tscSetQuerySort(SQueryInfo* pQueryInfo, SQueryAttr* pQueryAttr) {
+  if (pQueryInfo->interval.interval <= 0) {
+    return;
+  }
+  
+  if (pQueryInfo->pUpstream != NULL && taosArrayGetSize(pQueryInfo->pUpstream) > 0) {
+    size_t size = taosArrayGetSize(pQueryInfo->pUpstream);
+    for(int32_t i = 0; i < size; ++i) {
+      SQueryInfo* pq = taosArrayGetP(pQueryInfo->pUpstream, i);
+      if (pq->groupbyTag) {
+        pQueryAttr->needSort = true;
+        return;
+      }
+    }
+  }
+}
+
 
 void* createQInfoFromQueryNode(SQueryInfo* pQueryInfo, STableGroupInfo* pTableGroupInfo, SOperatorInfo* pSourceOperator,
                                char* sql, void* merger, int32_t stage, uint64_t qId) {
@@ -3714,6 +3894,7 @@ void* createQInfoFromQueryNode(SQueryInfo* pQueryInfo, STableGroupInfo* pTableGr
   SArray* pa = NULL;
   if (stage == MASTER_SCAN) {
     pQueryAttr->createFilterOperator = false;  // no need for parent query
+    tscSetQuerySort(pQueryInfo, pQueryAttr);
     pa = createExecOperatorPlan(pQueryAttr);
   } else {
     pa = createGlobalMergePlan(pQueryAttr);
@@ -3722,7 +3903,7 @@ void* createQInfoFromQueryNode(SQueryInfo* pQueryInfo, STableGroupInfo* pTableGr
   STsBufInfo bufInfo = {0};
   SQueryParam param = {.pOperator = pa};
   /*int32_t code = */initQInfo(&bufInfo, NULL, pSourceOperator, pQInfo, &param, NULL, 0, merger);
-  taosArrayDestroy(pa);
+  taosArrayDestroy(&pa);
 
   return pQInfo;
 

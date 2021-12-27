@@ -47,6 +47,8 @@ typedef enum {
 struct SSqlInfo;
 
 typedef void (*__async_cb_func_t)(void *param, TAOS_RES *tres, int32_t numOfRows);
+typedef void (*_freeSqlSupporter)(void **);
+
 
 typedef struct SNewVgroupInfo {
   int32_t    vgId;
@@ -113,8 +115,9 @@ typedef struct SParsedDataColInfo {
   int16_t        numOfCols;
   int16_t        numOfBound;
   uint16_t       flen;        // TODO: get from STSchema
-  uint16_t       allNullLen;  // TODO: get from STSchema
+  uint16_t       allNullLen;  // TODO: get from STSchema(base on SDataRow)
   uint16_t       extendedVarLen;
+  uint16_t       boundNullLen;    // bound column len with all NULL value(without VarDataOffsetT/SColIdx part)
   int32_t *      boundedColumns;  // bound column idx according to schema
   SBoundColumn * cols;
   SBoundIdxInfo *colIdxInfo;
@@ -128,9 +131,9 @@ typedef struct {
   int32_t kvLen;    // len of SKVRow
 } SMemRowInfo;
 typedef struct {
-  uint8_t      memRowType;   // default is 0, that is SDataRow
+  uint8_t      memRowType;   // default is 0, that is SDataRow 
   uint8_t      compareStat;  // 0 no need, 1 need compare
-  TDRowTLenT   kvRowInitLen;
+  int32_t      rowSize;
   SMemRowInfo *rowInfo;
 } SMemRowBuilder;
 
@@ -139,10 +142,16 @@ typedef enum {
   ROW_COMPARE_NEED = 1,
 } ERowCompareStat;
 
+typedef struct {
+  void *vgroupMap;  
+  void *tableMetaMap;
+  void *vgroupListBuf; 
+  int64_t ref;
+} SClusterInfo;
+
 int tsParseTime(SStrToken *pToken, int64_t *time, char **next, char *error, int16_t timePrec);
 
-int  initMemRowBuilder(SMemRowBuilder *pBuilder, uint32_t nRows, uint32_t nCols, uint32_t nBoundCols,
-                       int32_t allNullLen);
+int  initMemRowBuilder(SMemRowBuilder *pBuilder, uint32_t nRows, SParsedDataColInfo *pColInfo);
 void destroyMemRowBuilder(SMemRowBuilder *pBuilder);
 
 /**
@@ -234,7 +243,6 @@ typedef struct STableDataBlocks {
 typedef struct {
   STableMeta   *pTableMeta;
   SArray       *vgroupIdList;
-//  SVgroupsInfo *pVgroupsInfo;
 } STableMetaVgroupInfo;
 
 typedef struct SInsertStatementParam {
@@ -286,20 +294,14 @@ typedef struct {
   int32_t      resColumnId;
 } SSqlCmd;
 
-typedef struct SResRec {
-  int numOfRows;
-  int numOfTotal;
-} SResRec;
-
 typedef struct {
   int32_t        numOfRows;                  // num of results in current retrieval
-  int64_t        numOfRowsGroup;             // num of results of current group
   int64_t        numOfTotal;                 // num of total results
   int64_t        numOfClauseTotal;           // num of total result in current subclause
   char *         pRsp;
   int32_t        rspType;
   int32_t        rspLen;
-  uint64_t       qId;
+  uint64_t       qId;     // query id of SQInfo
   int64_t        useconds;
   int64_t        offset;  // offset value from vnode during projection query of stable
   int32_t        row;
@@ -307,17 +309,15 @@ typedef struct {
   int16_t        precision;
   bool           completed;
   int32_t        code;
-  int32_t        numOfGroups;
-  SResRec *      pGroupRec;
   char *         data;
   TAOS_ROW       tsrow;
   TAOS_ROW       urow;
+  bool           dataConverted;
   int32_t*       length;  // length for each field for current row
   char **        buffer;  // Buffer used to put multibytes encoded using unicode (wchar_t)
   SColumnIndex*  pColumnIndex;
 
-  TAOS_FIELD*           final;
-  SArithmeticSupport   *pArithSup;   // support the arithmetic expression calculation on agg functions
+  TAOS_FIELD*    final;
   struct SGlobalMerger *pMerger;
 } SSqlRes;
 
@@ -334,6 +334,7 @@ typedef struct STscObj {
   char               acctId[TSDB_ACCT_ID_LEN];
   char               db[TSDB_ACCT_ID_LEN + TSDB_DB_NAME_LEN];
   char               sversion[TSDB_VERSION_LEN];
+  char               clusterId[TSDB_CLUSTER_ID_LEN];
   char               writeAuth : 1;
   char               superAuth : 1;
   uint32_t           connId;
@@ -342,9 +343,11 @@ typedef struct STscObj {
   struct SSqlObj *   sqlList;
   struct SSqlStream *streamList;
   SRpcObj           *pRpcObj;
+  SClusterInfo       *pClusterInfo;
   SRpcCorEpSet      *tscCorMgmtEpSet;
   pthread_mutex_t    mutex;
   int32_t            numOfObj; // number of sqlObj from this tscObj
+      
   SReqOrigin         from;
 } STscObj;
 
@@ -363,6 +366,7 @@ typedef struct SSqlObj {
   __async_cb_func_t  fp;
   __async_cb_func_t  fetchFp;
   void            *param;
+  _freeSqlSupporter  freeParam;
   int64_t          stime;
   uint32_t         queryId;
   void *           pStream;
@@ -377,10 +381,10 @@ typedef struct SSqlObj {
   tsem_t           rspSem;
   SSqlCmd          cmd;
   SSqlRes          res;
-  bool             isBind;
 
   SSubqueryState   subState;
   struct SSqlObj **pSubs;
+  struct SSqlObj  *rootObj;
 
   int64_t          metaRid;
   int64_t          svgroupRid;
@@ -428,12 +432,15 @@ int  tscAcquireRpc(const char *key, const char *user, const char *secret,void **
 void tscReleaseRpc(void *param);
 void tscInitMsgsFp();
 
+void *tscAcquireClusterInfo(const char *clusterId);
+void tscReleaseClusterInfo(const char *clusterId);
+
 int tsParseSql(SSqlObj *pSql, bool initial);
 
 void tscProcessMsgFromServer(SRpcMsg *rpcMsg, SRpcEpSet *pEpSet);
 int  tscBuildAndSendRequest(SSqlObj *pSql, SQueryInfo* pQueryInfo);
 
-int  tscRenewTableMeta(SSqlObj *pSql, int32_t tableIndex);
+int  tscRenewTableMeta(SSqlObj *pSql);
 void tscAsyncResultOnError(SSqlObj *pSql);
 
 void tscQueueAsyncError(void(*fp), void *param, int32_t code);
@@ -445,8 +452,8 @@ int32_t tscTansformFuncForSTableQuery(SQueryInfo *pQueryInfo);
 void    tscRestoreFuncForSTableQuery(SQueryInfo *pQueryInfo);
 
 int32_t tscCreateResPointerInfo(SSqlRes *pRes, SQueryInfo *pQueryInfo);
-void tscSetResRawPtr(SSqlRes* pRes, SQueryInfo* pQueryInfo);
-void tscSetResRawPtrRv(SSqlRes* pRes, SQueryInfo* pQueryInfo, SSDataBlock* pBlock, bool convertNchar);
+void tscSetResRawPtr(SSqlRes* pRes, SQueryInfo* pQueryInfo, bool converted);
+void tscSetResRawPtrRv(SSqlRes* pRes, SQueryInfo* pQueryInfo, SSDataBlock* pBlock, bool convertNchar, bool convertJson);
 
 void handleDownstreamOperator(SSqlObj** pSqlList, int32_t numOfUpstream, SQueryInfo* px, SSqlObj* pParent);
 void destroyTableNameList(SInsertStatementParam* pInsertParam);
@@ -492,6 +499,9 @@ bool tscHasReachLimitation(SQueryInfo *pQueryInfo, SSqlRes *pRes);
 void tscSetBoundColumnInfo(SParsedDataColInfo *pColInfo, SSchema *pSchema, int32_t numOfCols);
 
 char *tscGetErrorMsgPayload(SSqlCmd *pCmd);
+int32_t tscGetErrorMsgLength(SSqlCmd* pCmd);
+
+int32_t tscErrorMsgWithCode(int32_t code, char* dstBuffer, const char* errMsg, const char* sql);
 
 int32_t tscInvalidOperationMsg(char *msg, const char *additionalInfo, const char *sql);
 int32_t tscSQLSyntaxErrMsg(char* msg, const char* additionalInfo,  const char* sql);
@@ -521,16 +531,6 @@ int32_t boundIdxCompar(const void *lhs, const void *rhs);
 static FORCE_INLINE int32_t getExtendedRowSize(STableDataBlocks *pBlock) {
   ASSERT(pBlock->rowSize == pBlock->pTableMeta->tableInfo.rowSize);
   return pBlock->rowSize + TD_MEM_ROW_DATA_HEAD_SIZE + pBlock->boundColumnInfo.extendedVarLen;
-}
-
-static FORCE_INLINE void checkAndConvertMemRow(SMemRow row, int32_t dataLen, int32_t kvLen) {
-  if (isDataRow(row)) {
-    if (kvLen < (dataLen * KVRatioConvert)) {
-      memRowSetConvert(row);
-    }
-  } else if (kvLen > dataLen) {
-    memRowSetConvert(row);
-  }
 }
 
 static FORCE_INLINE void initSMemRow(SMemRow row, uint8_t memRowType, STableDataBlocks *pBlock, int16_t nBoundCols) {
@@ -577,7 +577,7 @@ static FORCE_INLINE void convertToSKVRow(SMemRow dest, SMemRow src, SSchema *pSc
   SKVRow   kvRow = memRowKvBody(dest);
 
   memRowSetType(dest, SMEM_ROW_KV);
-  memRowSetKvVersion(kvRow, dataRowVersion(dataRow));
+  memRowSetKvVersion(dest, dataRowVersion(dataRow));
   kvRowSetNCols(kvRow, nBoundCols);
   kvRowSetLen(kvRow, (TDRowLenT)(TD_KV_ROW_HEAD_SIZE + sizeof(SColIdx) * nBoundCols));
 
@@ -632,8 +632,7 @@ static uint8_t TRUE_VALUE = (uint8_t)TSDB_TRUE;
 static uint8_t FALSE_VALUE = (uint8_t)TSDB_FALSE;
 
 static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pToken, SMemRow row, char *msg, char **str,
-                                               bool primaryKey, int16_t timePrec, int32_t toffset, int16_t colId,
-                                               int32_t *dataLen, int32_t *kvLen, uint8_t compareStat) {
+                                               bool primaryKey, int16_t timePrec, int32_t toffset, int16_t colId) {
   int64_t iv;
   int32_t ret;
   char *  endptr = NULL;
@@ -645,26 +644,22 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
   switch (pSchema->type) {
     case TSDB_DATA_TYPE_BOOL: {  // bool
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         if ((pToken->type == TK_BOOL || pToken->type == TK_STRING) && (pToken->n != 0)) {
           if (strncmp(pToken->z, "true", pToken->n) == 0) {
-            tscAppendMemRowColValEx(row, &TRUE_VALUE, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+            tdAppendMemRowColVal(row, &TRUE_VALUE, true, colId, pSchema->type, toffset);
           } else if (strncmp(pToken->z, "false", pToken->n) == 0) {
-            tscAppendMemRowColValEx(row, &FALSE_VALUE, true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                    compareStat);
+            tdAppendMemRowColVal(row, &FALSE_VALUE, true, colId, pSchema->type, toffset);
           } else {
             return tscSQLSyntaxErrMsg(msg, "invalid bool data", pToken->z);
           }
         } else if (pToken->type == TK_INTEGER) {
           iv = strtoll(pToken->z, NULL, 10);
-          tscAppendMemRowColValEx(row, ((iv == 0) ? &FALSE_VALUE : &TRUE_VALUE), true, colId, pSchema->type, toffset,
-                                  dataLen, kvLen, compareStat);
+          tdAppendMemRowColVal(row, ((iv == 0) ? &FALSE_VALUE : &TRUE_VALUE), true, colId, pSchema->type, toffset);
         } else if (pToken->type == TK_FLOAT) {
           double dv = strtod(pToken->z, NULL);
-          tscAppendMemRowColValEx(row, ((dv == 0) ? &FALSE_VALUE : &TRUE_VALUE), true, colId, pSchema->type, toffset,
-                                  dataLen, kvLen, compareStat);
+          tdAppendMemRowColVal(row, ((dv == 0) ? &FALSE_VALUE : &TRUE_VALUE), true, colId, pSchema->type, toffset);
         } else {
           return tscInvalidOperationMsg(msg, "invalid bool data", pToken->z);
         }
@@ -674,8 +669,7 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
 
     case TSDB_DATA_TYPE_TINYINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, true);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -685,15 +679,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         uint8_t tmpVal = (uint8_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_UTINYINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, false);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -703,15 +696,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         uint8_t tmpVal = (uint8_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_SMALLINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, true);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -721,15 +713,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         int16_t tmpVal = (int16_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_USMALLINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, false);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -739,15 +730,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         uint16_t tmpVal = (uint16_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_INT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, true);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -757,15 +747,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         int32_t tmpVal = (int32_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_UINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, false);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -775,15 +764,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         uint32_t tmpVal = (uint32_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;
 
     case TSDB_DATA_TYPE_BIGINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, true);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -792,14 +780,13 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
           return tscInvalidOperationMsg(msg, "bigint data overflow", pToken->z);
         }
 
-        tscAppendMemRowColValEx(row, &iv, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &iv, true, colId, pSchema->type, toffset);
       }
       break;
 
     case TSDB_DATA_TYPE_UBIGINT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         ret = tStrToInteger(pToken->z, pToken->type, pToken->n, &iv, false);
         if (ret != TSDB_CODE_SUCCESS) {
@@ -809,14 +796,13 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         uint64_t tmpVal = (uint64_t)iv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
       break;
 
     case TSDB_DATA_TYPE_FLOAT:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         double dv;
         if (TK_ILLEGAL == tscToDouble(pToken, &dv, &endptr)) {
@@ -829,14 +815,13 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         }
 
         float tmpVal = (float)dv;
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
       break;
 
     case TSDB_DATA_TYPE_DOUBLE:
       if (isNullStr(pToken)) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         double dv;
         if (TK_ILLEGAL == tscToDouble(pToken, &dv, &endptr)) {
@@ -847,15 +832,14 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
           return tscInvalidOperationMsg(msg, "illegal double data", pToken->z);
         }
 
-        tscAppendMemRowColValEx(row, &dv, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &dv, true, colId, pSchema->type, toffset);
       }
       break;
 
     case TSDB_DATA_TYPE_BINARY:
       // binary data cannot be null-terminated char string, otherwise the last char of the string is lost
       if (pToken->type == TK_NULL) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {  // too long values will return invalid sql, not be truncated automatically
         if (pToken->n + VARSTR_HEADER_SIZE > pSchema->bytes) {  // todo refactor
           return tscInvalidOperationMsg(msg, "string data overflow", pToken->z);
@@ -863,14 +847,13 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         // STR_WITH_SIZE_TO_VARSTR(payload, pToken->z, pToken->n);
         char *rowEnd = memRowEnd(row);
         STR_WITH_SIZE_TO_VARSTR(rowEnd, pToken->z, pToken->n);
-        tscAppendMemRowColValEx(row, rowEnd, false, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, rowEnd, false, colId, pSchema->type, toffset);
       }
       break;
 
     case TSDB_DATA_TYPE_NCHAR:
       if (pToken->type == TK_NULL) {
-        tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                compareStat);
+        tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
       } else {
         // if the converted output len is over than pColumnModel->bytes, return error: 'Argument list too long'
         int32_t output = 0;
@@ -882,7 +865,7 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
           return tscInvalidOperationMsg(msg, buf, pToken->z);
         }
         varDataSetLen(rowEnd, output);
-        tscAppendMemRowColValEx(row, rowEnd, false, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, rowEnd, false, colId, pSchema->type, toffset);
       }
       break;
 
@@ -891,17 +874,16 @@ static FORCE_INLINE int32_t tsParseOneColumnKV(SSchema *pSchema, SStrToken *pTok
         if (primaryKey) {
           // When building SKVRow primaryKey, we should not skip even with NULL value.
           int64_t tmpVal = 0;
-          tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+          tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
         } else {
-          tscAppendMemRowColValEx(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset, dataLen, kvLen,
-                                  compareStat);
+          tdAppendMemRowColVal(row, getNullValue(pSchema->type), true, colId, pSchema->type, toffset);
         }
       } else {
         int64_t tmpVal;
         if (tsParseTime(pToken, &tmpVal, str, msg, timePrec) != TSDB_CODE_SUCCESS) {
           return tscInvalidOperationMsg(msg, "invalid timestamp", pToken->z);
         }
-        tscAppendMemRowColValEx(row, &tmpVal, true, colId, pSchema->type, toffset, dataLen, kvLen, compareStat);
+        tdAppendMemRowColVal(row, &tmpVal, true, colId, pSchema->type, toffset);
       }
 
       break;

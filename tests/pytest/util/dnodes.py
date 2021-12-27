@@ -14,6 +14,9 @@
 import sys
 import os
 import os.path
+import platform
+import pathlib
+import shutil
 import subprocess
 from time import sleep
 from util.log import *
@@ -41,6 +44,7 @@ class TDSimClient:
             "jnidebugFlag": "135",
             "qdebugFlag": "135",
             "telemetryReporting": "0",
+            "enableCoreFile": "1",
         }
 
     def getLogDir(self):
@@ -58,35 +62,48 @@ class TDSimClient:
         self.cfgDict.update({option: value})
 
     def cfg(self, option, value):
-        cmd = "echo '%s %s' >> %s" % (option, value, self.cfgPath)
+        cmd = "echo %s %s >> %s" % (option, value, self.cfgPath)
         if os.system(cmd) != 0:
             tdLog.exit(cmd)
-
+    def os_string(self,path):
+        os_path = path.replace("/",os.sep)
+        return os_path
     def deploy(self):
-        self.logDir = "%s/sim/psim/log" % (self.path)
-        self.cfgDir = "%s/sim/psim/cfg" % (self.path)
-        self.cfgPath = "%s/sim/psim/cfg/taos.cfg" % (self.path)
+        self.logDir = self.os_string("%s/sim/psim/log" % (self.path))
+        self.cfgDir = self.os_string("%s/sim/psim/cfg" % (self.path))
+        self.cfgPath = self.os_string("%s/sim/psim/cfg/taos.cfg" % (self.path))
 
-        cmd = "rm -rf " + self.logDir
-        if os.system(cmd) != 0:
-            tdLog.exit(cmd)
-    
-        cmd = "mkdir -p " + self.logDir
-        if os.system(cmd) != 0:
-            tdLog.exit(cmd)
-
-        cmd = "rm -rf " + self.cfgDir
-        if os.system(cmd) != 0:
-            tdLog.exit(cmd)
-
-        cmd = "mkdir -p " + self.cfgDir
-        if os.system(cmd) != 0:
-            tdLog.exit(cmd)
-
-        cmd = "touch " + self.cfgPath
-        if os.system(cmd) != 0:
-            tdLog.exit(cmd)
-
+        # cmd = "rm -rf " + self.logDir
+        # if os.system(cmd) != 0:
+        #     tdLog.exit(cmd)
+        if os.path.exists(self.logDir): 
+            try:
+                shutil.rmtree(self.logDir)
+            except:
+                tdLog.exit("del %s failed"%self.logDir)
+        # cmd = "mkdir -p " + self.logDir
+        # if os.system(cmd) != 0:
+        #     tdLog.exit(cmd)
+        os.makedirs(self.logDir)
+        # cmd = "rm -rf " + self.cfgDir
+        # if os.system(cmd) != 0:
+        #     tdLog.exit(cmd)
+        if os.path.exists(self.cfgDir): 
+            try:
+                shutil.rmtree(self.cfgDir)
+            except:
+                tdLog.exit("del %s failed"%self.cfgDir)
+        # cmd = "mkdir -p " + self.cfgDir
+        # if os.system(cmd) != 0:
+        #     tdLog.exit(cmd)
+        os.makedirs(self.cfgDir)
+        # cmd = "touch " + self.cfgPath
+        # if os.system(cmd) != 0:
+        #     tdLog.exit(cmd)
+        try:
+            pathlib.Path(self.cfgPath).touch()
+        except:
+             tdLog.exit("create %s failed"%self.cfgPath)
         if self.testCluster:
             self.cfg("masterIp", "192.168.0.1")
             self.cfg("secondIp", "192.168.0.2")
@@ -122,7 +139,7 @@ class TDDnode:
             "charset":"UTF-8",
             "asyncLog":"0",
             "anyIp":"0",
-            "tsEnableTelemetryReporting":"0",
+            "telemetryReporting":"0",
             "dDebugFlag":"135",
             "tsdbDebugFlag":"135",
             "mDebugFlag":"135",
@@ -135,7 +152,8 @@ class TDDnode:
             "udebugFlag":"135",
             "jnidebugFlag":"135",
             "qdebugFlag":"135",
-            "maxSQLLength":"1048576"
+            "maxSQLLength":"1048576",
+            "enableCoreFile": "1",
         }
 
     def init(self, path):
@@ -233,7 +251,7 @@ class TDDnode:
             "dnode:%d is deployed and configured by %s" %
             (self.index, self.cfgPath))
 
-    def getBuildPath(self):
+    def getBuildPath(self, tool="taosd"):
         buildPath = ""
         selfPath = os.path.dirname(os.path.realpath(__file__))
 
@@ -243,7 +261,7 @@ class TDDnode:
             projPath = selfPath[:selfPath.find("tests")]
 
         for root, dirs, files in os.walk(projPath):
-            if ("taosd" in files):
+            if ((tool) in files):
                 rootRealPath = os.path.dirname(os.path.realpath(root))
                 if ("packaging" not in rootRealPath):
                     buildPath = root[:len(root)-len("/build/bin")]
@@ -259,6 +277,7 @@ class TDDnode:
             tdLog.info("taosd found in %s" % buildPath)
 
         binPath = buildPath + "/build/bin/taosd"
+        taosadapterBinPath = buildPath + "/build/bin/taosadapter"
 
         if self.deployed == 0:
             tdLog.exit("dnode:%d is not deployed" % (self.index))
@@ -274,8 +293,14 @@ class TDDnode:
 
             print(cmd)
 
+        taosadapterCmd = "nohup %s > /dev/null 2>&1 & " % (
+                taosadapterBinPath)
+        if os.system(taosadapterCmd) != 0:
+            tdLog.exit(taosadapterCmd)
+
         if os.system(cmd) != 0:
             tdLog.exit(cmd)
+
         self.running = 1
         tdLog.debug("dnode:%d is running with %s " % (self.index, cmd))
         if self.valgrind == 0:
@@ -317,6 +342,7 @@ class TDDnode:
             tdLog.info("taosd found in %s" % buildPath)
 
         binPath = buildPath + "/build/bin/taosd"
+        taosadapterBinPath = buildPath + "/build/bin/taosadapter"
 
         if self.deployed == 0:
             tdLog.exit("dnode:%d is not deployed" % (self.index))
@@ -332,12 +358,29 @@ class TDDnode:
 
             print(cmd)
 
+        taosadapterCmd = "%s > /dev/null 2>&1 & " % (taosadapterBinPath)
+        if os.system(taosadapterCmd) != 0:
+            tdLog.exit(taosadapterCmd)
+
         if os.system(cmd) != 0:
             tdLog.exit(cmd)
         self.running = 1
         tdLog.debug("dnode:%d is running with %s " % (self.index, cmd))
 
     def stop(self):
+        taosadapterToBeKilled = "taosadapter"
+
+        taosadapterPsCmd = "ps -ef|grep -w %s| grep -v grep | awk '{print $2}'" % taosadapterToBeKilled
+        taosadapterProcessID = subprocess.check_output(
+                    taosadapterPsCmd, shell=True).decode("utf-8")
+
+        while(taosadapterProcessID):
+            taosadapterKillCmd = "kill -INT %s > /dev/null 2>&1" % taosadapterProcessID
+            os.system(taosadapterKillCmd)
+            time.sleep(1)
+            taosadapterProcessID = subprocess.check_output(
+                    taosadapterPsCmd, shell=True).decode("utf-8")
+
         if self.valgrind == 0:
             toBeKilled = "taosd"
         else:
@@ -401,7 +444,7 @@ class TDDnode:
             tdLog.exit(cmd)
 
     def cfg(self, option, value):
-        cmd = "echo '%s %s' >> %s" % (option, value, self.cfgPath)
+        cmd = "echo %s %s >> %s" % (option, value, self.cfgPath)
         if os.system(cmd) != 0:
             tdLog.exit(cmd)
 

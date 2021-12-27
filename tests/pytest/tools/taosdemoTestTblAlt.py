@@ -26,10 +26,11 @@ class TDTestCase:
         tdLog.debug("start to execute %s" % __file__)
         tdSql.init(conn.cursor(), logSql)
 
-        self.numberOfTables = 10
+        self.numberOfTables = 8
         self.numberOfRecords = 1000000
 
     def getBuildPath(self):
+        buildPath=""
         selfPath = os.path.dirname(os.path.realpath(__file__))
 
         if ("community" in selfPath):
@@ -38,7 +39,7 @@ class TDTestCase:
             projPath = selfPath[:selfPath.find("tests")]
 
         for root, dirs, files in os.walk(projPath):
-            if ("taosd" in files):
+            if ("taosd" in files and "taosBenchmark" in files):
                 rootRealPath = os.path.dirname(os.path.realpath(root))
                 if ("packaging" not in rootRealPath):
                     buildPath = root[:len(root) - len("/build/bin")]
@@ -48,33 +49,42 @@ class TDTestCase:
     def insertDataAndAlterTable(self, threadID):
         buildPath = self.getBuildPath()
         if (buildPath == ""):
-            tdLog.exit("taosd not found!")
+            tdLog.exit("taosd or staosBenchmark not found!")
         else:
             tdLog.info("taosd found in %s" % buildPath)
         binPath = buildPath + "/build/bin/"
 
         if(threadID == 0):
-            os.system("%staosdemo -y -t %d -n %d -b INT,INT,INT,INT -m t" %
+            print("%staosBenchmark -y -t %d -n %d -b INT,INT,INT,INT" %
+                      (binPath, self.numberOfTables, self.numberOfRecords))
+            os.system("%staosBenchmark -y -t %d -n %d -b INT,INT,INT,INT" %
                       (binPath, self.numberOfTables, self.numberOfRecords))
         if(threadID == 1):
             time.sleep(2)
             print("use test")
-            while True:
+            max_try = 100
+            count = 0
+            while (count < max_try):
                 try:
                     tdSql.execute("use test")
                     break
                 except Exception as e:
                     tdLog.info("use database test failed")
-                    time.sleep(1)
+                    time.sleep(2)
+                    count += 1
+                    print("try %d times" % count)
                     continue
 
             # check if all the tables have heen created
-            while True:
+            count = 0
+            while (count < max_try):
                 try:
                     tdSql.query("show tables")
                 except Exception as e:
                     tdLog.info("show tables test failed")
-                    time.sleep(1)
+                    time.sleep(2)
+                    count += 1
+                    print("try %d times" % count)
                     continue
 
                 rows = tdSql.queryRows
@@ -83,13 +93,17 @@ class TDTestCase:
                     break
                 time.sleep(1)
             # check if there are any records in the last created table
-            while True:
+            count = 0
+            while (count < max_try):
                 print("query started")
+                print("try %d times" % count)
                 try:
-                    tdSql.query("select * from test.t9")
+                    tdSql.query("select * from test.d7")
                 except Exception as e:
                     tdLog.info("select * test failed")
                     time.sleep(2)
+                    count += 1
+                    print("try %d times" % count)
                     continue
 
                 rows = tdSql.queryRows
@@ -100,8 +114,8 @@ class TDTestCase:
 
             print("alter table test.meters add column c10 int")
             tdSql.execute("alter table test.meters add column c10 int")
-            print("insert into test.t9 values (now, 1, 2, 3, 4, 0)")
-            tdSql.execute("insert into test.t9 values (now, 1, 2, 3, 4, 0)")
+            print("insert into test.d7 values (now, 1, 2, 3, 4, 0)")
+            tdSql.execute("insert into test.d7 values (now, 1, 2, 3, 4, 0)")
 
     def run(self):
         tdSql.prepare()

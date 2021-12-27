@@ -16,6 +16,7 @@ package com.taosdata.jdbc;
 
 import com.taosdata.jdbc.utils.NullType;
 
+import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -49,7 +50,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setBooleanValue(int col, boolean value) {
         setBoolean(col - 1, value);
@@ -86,7 +87,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setByteValue(int colIndex, byte value) {
         setByte(colIndex - 1, value);
@@ -100,7 +101,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setShortValue(int colIndex, short value) {
         setShort(colIndex - 1, value);
@@ -114,7 +115,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setIntValue(int colIndex, int value) {
         setInt(colIndex - 1, value);
@@ -189,12 +190,12 @@ public class TSDBResultSetRowData {
         long value = (long) obj;
         if (value < 0)
             throw TSDBError.createSQLException(TSDBErrorNumbers.ERROR_NUMERIC_VALUE_OUT_OF_RANGE);
-        return Long.valueOf(value).intValue();
+        return (int) value;
     }
 
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setLongValue(int colIndex, long value) {
         setLong(colIndex - 1, value);
@@ -262,7 +263,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setFloatValue(int colIndex, float value) {
         setFloat(colIndex - 1, value);
@@ -302,7 +303,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setDoubleValue(int colIndex, double value) {
         setDouble(colIndex - 1, value);
@@ -342,7 +343,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setStringValue(int colIndex, String value) {
         data.set(colIndex - 1, value);
@@ -361,7 +362,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setByteArrayValue(int colIndex, byte[] value) {
         setByteArray(colIndex - 1, value);
@@ -378,8 +379,8 @@ public class TSDBResultSetRowData {
         //  this setByteArr(int, byte[]) to handle NCHAR value, we need to build a String with charsetEncoding by TaosGlobalConfig
         try {
             data.set(col, new String(value, TaosGlobalConfig.getCharset()));
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (UnsupportedEncodingException e) {
+            throw new RuntimeException(e.getMessage());
         }
     }
 
@@ -424,7 +425,7 @@ public class TSDBResultSetRowData {
     }
 
     /**
-     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use a index start from 1 in JDBC api
+     * $$$ this method is invoked by databaseMetaDataResultSet and so on which use an index start from 1 in JDBC api
      */
     public void setTimestampValue(int colIndex, long value) {
         setTimestamp(colIndex - 1, value, 0);
@@ -442,16 +443,29 @@ public class TSDBResultSetRowData {
             case 0: {
                 milliseconds = ts;
                 fracNanoseconds = (int) (ts * 1_000_000 % 1_000_000_000);
+                fracNanoseconds = fracNanoseconds < 0 ? 1_000_000_000 + fracNanoseconds : fracNanoseconds;
                 break;
             }
             case 1: {
                 milliseconds = ts / 1_000;
                 fracNanoseconds = (int) (ts * 1_000 % 1_000_000_000);
+                if (fracNanoseconds < 0) {
+                    if (milliseconds == 0 ){
+                        milliseconds = -1;
+                    }
+                    fracNanoseconds += 1_000_000_000;
+                }
                 break;
             }
             case 2: {
                 milliseconds = ts / 1_000_000;
                 fracNanoseconds = (int) (ts % 1_000_000_000);
+                if (fracNanoseconds < 0) {
+                    if (milliseconds == 0 ){
+                        milliseconds = -1;
+                    }
+                    fracNanoseconds += 1_000_000_000;
+                }
                 break;
             }
             default: {

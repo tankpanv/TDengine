@@ -23,6 +23,7 @@ extern "C" {
 #include "os.h"
 
 #include "tname.h"
+#include "texpr.h"
 #include "taosdef.h"
 #include "trpc.h"
 #include "tvariant.h"
@@ -56,7 +57,7 @@ extern "C" {
 #define TSDB_FUNC_PRJ          21
 
 #define TSDB_FUNC_TAGPRJ       22
-#define TSDB_FUNC_ARITHM       23
+#define TSDB_FUNC_SCALAR_EXPR  23
 #define TSDB_FUNC_DIFF         24
 
 #define TSDB_FUNC_FIRST_DST    25
@@ -68,18 +69,21 @@ extern "C" {
 #define TSDB_FUNC_IRATE        30
 #define TSDB_FUNC_TID_TAG      31
 #define TSDB_FUNC_DERIVATIVE   32
-#define TSDB_FUNC_BLKINFO      33
 
+#define TSDB_FUNC_CSUM         33
+#define TSDB_FUNC_MAVG         34
+#define TSDB_FUNC_SAMPLE       35
 
-#define TSDB_FUNC_HISTOGRAM    34
-#define TSDB_FUNC_HLL          35
-#define TSDB_FUNC_MODE         36
-#define TSDB_FUNC_SAMPLE       37
-#define TSDB_FUNC_CEIL         38
-#define TSDB_FUNC_FLOOR        39
-#define TSDB_FUNC_ROUND        40
-#define TSDB_FUNC_MAVG         41
-#define TSDB_FUNC_CSUM         42
+#define TSDB_FUNC_BLKINFO      36
+
+#define TSDB_FUNC_ELAPSED      37 
+
+///////////////////////////////////////////
+// the following functions is not implemented.
+// after implementation, move them before TSDB_FUNC_BLKINFO. also make TSDB_FUNC_BLKINFO the maxium function index
+// #define TSDB_FUNC_HISTOGRAM    40
+// #define TSDB_FUNC_HLL          41
+// #define TSDB_FUNC_MODE         42
 
 #define TSDB_FUNCSTATE_SO           0x1u    // single output
 #define TSDB_FUNCSTATE_MO           0x2u    // dynamic number of output, not multinumber of output e.g., TOP/BOTTOM
@@ -106,6 +110,10 @@ extern "C" {
 #define MAX_INTERVAL_TIME_WINDOW 1000000  // maximum allowed time windows in final results
 #define TOP_BOTTOM_QUERY_LIMIT   100
 
+// apercentile(arg1,agr2,arg3) param arg3 value is below:
+#define ALGO_DEFAULT 0
+#define ALGO_TDIGEST 1
+
 enum {
   MASTER_SCAN   = 0x0u,
   REVERSE_SCAN  = 0x1u,
@@ -118,14 +126,14 @@ enum {
 #define QUERY_IS_PROJECTION_QUERY(type)  (((type)&TSDB_QUERY_TYPE_PROJECTION_QUERY) != 0)
 #define QUERY_IS_FREE_RESOURCE(type)     (((type)&TSDB_QUERY_TYPE_FREE_RESOURCE) != 0)
 
-typedef struct SArithmeticSupport {
+typedef struct SScalarExprSupport {
   SExprInfo   *pExprInfo;
   int32_t      numOfCols;
   SColumnInfo *colList;
   void        *exprList;   // client side used
   int32_t      offset;
   char**       data;
-} SArithmeticSupport;
+} SScalarExprSupport;
 
 typedef struct SQLPreAggVal {
   bool        isSet;             // statistics info set or not
@@ -173,7 +181,7 @@ typedef struct SQLFunctionCtx {
   int16_t      inputBytes;
   
   int16_t      outputType;
-  int16_t      outputBytes;   // size of results, determined by function and input column data type
+  int32_t      outputBytes;   // size of results, determined by function and input column data type
   int32_t      interBufBytes; // internal buffer size
   bool         hasNull;       // null value exist in current block
   bool         requireNull;   // require null in some function
@@ -182,6 +190,7 @@ typedef struct SQLFunctionCtx {
   char *       pOutput;       // final result output buffer, point to sdata->data
   uint8_t      currentStage;  // record current running step, default: 0
   int64_t      startTs;       // timestamp range of current query when function is executed on a specific data block
+  int64_t      endTs;
   int32_t      numOfParams;
   tVariant     param[4];      // input parameter, e.g., top(k, 20), the number of results for top query is kept in param
   int64_t     *ptsList;       // corresponding timestamp array list
@@ -191,6 +200,7 @@ typedef struct SQLFunctionCtx {
 
   SResultRowCellInfo *resultInfo;
 
+  int16_t      colId;         // used for user-specified constant value
   SExtTagsInfo tagInfo;
   SPoint1      start;
   SPoint1      end;
@@ -215,7 +225,7 @@ typedef struct SAggFunctionInfo {
 #define GET_RES_INFO(ctx) ((ctx)->resultInfo)
 
 int32_t getResultDataInfo(int32_t dataType, int32_t dataBytes, int32_t functionId, int32_t param, int16_t *type,
-                          int16_t *len, int32_t *interBytes, int16_t extLength, bool isSuperTable, SUdfInfo* pUdfInfo);
+                          int32_t *len, int32_t *interBytes, int16_t extLength, bool isSuperTable, SUdfInfo* pUdfInfo);
 int32_t isValidFunction(const char* name, int32_t len);
 
 #define IS_STREAM_QUERY_VALID(x)  (((x)&TSDB_FUNCSTATE_STREAM) != 0)
@@ -243,7 +253,7 @@ void blockDistInfoToBinary(STableBlockDist* pDist, struct SBufferWriter* bw);
 void blockDistInfoFromBinary(const char* data, int32_t len, STableBlockDist* pDist);
 
 /* global sql function array */
-extern struct SAggFunctionInfo aAggs[];
+extern struct SAggFunctionInfo aAggs[40];
 
 extern int32_t functionCompatList[]; // compatible check array list
 
@@ -260,11 +270,11 @@ bool topbot_datablock_filter(SQLFunctionCtx *pCtx, const char *minval, const cha
 
 static FORCE_INLINE void initResultInfo(SResultRowCellInfo *pResInfo, int32_t bufLen) {
   pResInfo->initialized = true;  // the this struct has been initialized flag
-  
+
   pResInfo->complete  = false;
   pResInfo->hasResult = false;
   pResInfo->numOfRes  = 0;
-  
+
   memset(GET_ROWCELL_INTERBUF(pResInfo), 0, bufLen);
 }
 

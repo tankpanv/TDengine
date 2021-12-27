@@ -2,11 +2,9 @@
 
 ## 总体介绍
 
-TDengine 提供了遵循 JDBC 标准（3.0）API 规范的 `taos-jdbcdriver` 实现，可在 maven 的中央仓库 [Sonatype Repository](https://search.maven.org/artifact/com.taosdata.jdbc/taos-jdbcdriver) 搜索下载。
-
 `taos-jdbcdriver` 的实现包括 2 种形式： JDBC-JNI 和 JDBC-RESTful（taos-jdbcdriver-2.0.18 开始支持 JDBC-RESTful）。 JDBC-JNI 通过调用客户端 libtaos.so（或 taos.dll ）的本地方法实现， JDBC-RESTful 则在内部封装了 RESTful 接口实现。
 
-![tdengine-connector](page://images/tdengine-jdbc-connector.png)
+![tdengine-connector](../../images/tdengine-jdbc-connector.png)
 
 上图显示了 3 种 Java 应用使用连接器访问 TDengine 的方式：
 
@@ -14,12 +12,10 @@ TDengine 提供了遵循 JDBC 标准（3.0）API 规范的 `taos-jdbcdriver` 实
 * RESTful：应用将 SQL 发送给位于物理节点2（pnode2）上的 RESTful 连接器，再调用客户端 API（libtaos.so）。
 * JDBC-RESTful：Java 应用通过 JDBC-RESTful 的 API ，将 SQL 封装成一个 RESTful 请求，发送给物理节点2的 RESTful 连接器。
 
-TDengine 的 JDBC 驱动实现尽可能与关系型数据库驱动保持一致，但时序空间数据库与关系对象型数据库服务的对象和技术特征存在差异，导致 `taos-jdbcdriver` 与传统的 JDBC driver 也存在一定差异。在使用时需要注意以下几点：
+TDengine 的 JDBC 驱动实现尽可能与关系型数据库驱动保持一致，但TDengine与关系对象型数据库的使用场景和技术特征存在差异，导致 `taos-jdbcdriver` 与传统的 JDBC driver 也存在一定差异。在使用时需要注意以下几点：
 
 * TDengine 目前不支持针对单条数据记录的删除操作。
 * 目前不支持事务操作。
-* 目前不支持嵌套查询（nested query）。
-* 对每个 Connection 的实例，至多只能有一个打开的 ResultSet 实例；如果在 ResultSet 还没关闭的情况下执行了新的查询，taos-jdbcdriver 会自动关闭上一个 ResultSet。
 
 ### JDBC-JNI和JDBC-RESTful的对比
 
@@ -50,68 +46,69 @@ TDengine 的 JDBC 驱动实现尽可能与关系型数据库驱动保持一致�
 </tr>
 </table>
 
-注意：与 JNI 方式不同，RESTful 接口是无状态的，因此 `USE db_name` 指令没有效果，RESTful 下所有对表名、超级表名的引用都需要指定数据库名前缀。
+注意：与 JNI 方式不同，RESTful 接口是无状态的。在使用JDBC-RESTful时，需要在sql中指定表、超级表的数据库名称。（从 TDengine 2.2.0.0 版本开始，也可以在 RESTful url 中指定当前 SQL 语句所使用的默认数据库名。）例如：
+```sql
+INSERT INTO test.t1 USING test.weather (ts, temperature) TAGS('beijing') VALUES(now, 24.6);
+```
 
-### <a class="anchor" id="version"></a>TAOS-JDBCDriver 版本以及支持的 TDengine 版本和 JDK 版本
+## <a class="anchor" id="version"></a>TAOS-JDBCDriver 版本以及支持的 TDengine 版本和 JDK 版本
 
-| taos-jdbcdriver 版本 | TDengine 版本     | JDK 版本 |
-| -------------------- | ----------------- | -------- |
-| 2.0.33 - 2.0.34      | 2.0.3.0 及以上      | 1.8.x    |
-| 2.0.31 - 2.0.32      | 2.1.3.0 及以上      | 1.8.x    |
+| taos-jdbcdriver 版本 | TDengine 版本        | JDK 版本 |
+|--------------------|--------------------| -------- |
+| 2.0.36             | 2.4.0 及以上          | 1.8.x    |
+| 2.0.35             | 2.3.0 及以上          | 1.8.x    |
+| 2.0.33 - 2.0.34    | 2.0.3.0 及以上        | 1.8.x    |
+| 2.0.31 - 2.0.32    | 2.1.3.0 及以上        | 1.8.x    |
 | 2.0.22 - 2.0.30    | 2.0.18.0 - 2.1.2.x | 1.8.x    |
-| 2.0.12 - 2.0.21     | 2.0.8.0 - 2.0.17.x | 1.8.x    |
-| 2.0.4 - 2.0.11       | 2.0.0.0 - 2.0.7.x | 1.8.x    |
-| 1.0.3                | 1.6.1.x 及以上    | 1.8.x    |
-| 1.0.2                | 1.6.1.x 及以上    | 1.8.x    |
-| 1.0.1                | 1.6.1.x 及以上    | 1.8.x    |
+| 2.0.12 - 2.0.21    | 2.0.8.0 - 2.0.17.x | 1.8.x    |
+| 2.0.4 - 2.0.11     | 2.0.0.0 - 2.0.7.x  | 1.8.x    |
+| 1.0.3              | 1.6.1.x 及以上        | 1.8.x    |
+| 1.0.2              | 1.6.1.x 及以上        | 1.8.x    |
+| 1.0.1              | 1.6.1.x 及以上        | 1.8.x    |
 
-### TDengine DataType 和 Java DataType
+## TDengine DataType 和 Java DataType
 
 TDengine 目前支持时间戳、数字、字符、布尔类型，与 Java 对应类型转换如下：
 
-| TDengine DataType | Java DataType      |
-| ----------------- | ------------------ |
-| TIMESTAMP         | java.sql.Timestamp |
-| INT               | java.lang.Integer  |
-| BIGINT            | java.lang.Long     |
-| FLOAT             | java.lang.Float    |
-| DOUBLE            | java.lang.Double   |
-| SMALLINT          | java.lang.Short    |
-| TINYINT           | java.lang.Byte     |
-| BOOL              | java.lang.Boolean  |
-| BINARY            | byte array         |
-| NCHAR             | java.lang.String   |
+| TDengine DataType | JDBCType （driver 版本 < 2.0.24） | JDBCType （driver 版本 >= 2.0.24） |
+|-------------------|-------------------------------| ------------------ |
+| TIMESTAMP         | java.lang.Long                | java.sql.Timestamp |
+| INT               | java.lang.Integer             | java.lang.Integer  |
+| BIGINT            | java.lang.Long                | java.lang.Long     |
+| FLOAT             | java.lang.Float               | java.lang.Float    |
+| DOUBLE            | java.lang.Double              | java.lang.Double   |
+| SMALLINT          | java.lang.Short               | java.lang.Short    |
+| TINYINT           | java.lang.Byte                | java.lang.Byte     |
+| BOOL              | java.lang.Boolean             | java.lang.Boolean  |
+| BINARY            | java.lang.String              | byte array         |
+| NCHAR             | java.lang.String              | java.lang.String   |
+| JSON              | -                             | java.lang.String   |
 
-## 安装
+注意：JSON类型仅在tag中支持。
 
-Java连接器支持的系统有： Linux 64/Windows x64/Windows x86。
+## 安装Java Connector
 
-**安装前准备：**
+### 安装前准备
 
-- 已安装TDengine服务器端
-- 已安装好TDengine应用驱动，具体请参照 [安装连接器驱动步骤](https://www.taosdata.com/cn/documentation/connector#driver) 章节
+使用Java Connector连接数据库前，需要具备以下条件：
+1. Linux或Windows操作系统
+2. Java 1.8以上运行时环境
+3. TDengine-client（使用JDBC-JNI时必须，使用JDBC-RESTful时非必须）
 
-TDengine 为了方便 Java 应用使用，遵循 JDBC 标准(3.0)API 规范提供了 `taos-jdbcdriver` 实现。可以通过 [Sonatype Repository](https://search.maven.org/artifact/com.taosdata.jdbc/taos-jdbcdriver) 搜索并下载。
-
-由于 TDengine 的应用驱动是使用C语言开发的，使用 taos-jdbcdriver 驱动包时需要依赖系统对应的本地函数库。
-
+**注意**：由于 TDengine 的应用驱动是使用C语言开发的，使用 taos-jdbcdriver 驱动包时需要依赖系统对应的本地函数库。
 - libtaos.so 在 Linux 系统中成功安装 TDengine 后，依赖的本地函数库 libtaos.so 文件会被自动拷贝至 /usr/lib/libtaos.so，该目录包含在 Linux 自动扫描路径上，无需单独指定。
-
 - taos.dll 在 Windows 系统中安装完客户端之后，驱动包依赖的 taos.dll 文件会自动拷贝到系统默认搜索路径 C:/Windows/System32 下，同样无需要单独指定。
 
-注意：在 Windows 环境开发时需要安装 TDengine 对应的 [windows 客户端](https://www.taosdata.com/cn/all-downloads/#TDengine-Windows-Client)，Linux 服务器安装完 TDengine 之后默认已安装 client，也可以单独安装 [Linux 客户端](https://www.taosdata.com/cn/getting-started/#快速上手) 连接远程 TDengine Server。
+**注意**：在 Windows 环境开发时需要安装 TDengine 对应的 [windows 客户端](https://www.taosdata.com/cn/all-downloads/#TDengine-Windows-Client)，Linux 服务器安装完 TDengine 之后默认已安装 client，也可以单独安装 [Linux 客户端](https://www.taosdata.com/cn/getting-started/#快速上手) 连接远程 TDengine Server。
 
-### 如何获取 TAOS-JDBCDriver
-
-**maven仓库**
+### 通过maven获取JDBC driver
 
 目前 taos-jdbcdriver 已经发布到 [Sonatype Repository](https://search.maven.org/artifact/com.taosdata.jdbc/taos-jdbcdriver) 仓库，且各大仓库都已同步。
-
 - [sonatype](https://search.maven.org/artifact/com.taosdata.jdbc/taos-jdbcdriver)
 - [mvnrepository](https://mvnrepository.com/artifact/com.taosdata.jdbc/taos-jdbcdriver)
 - [maven.aliyun](https://maven.aliyun.com/mvn/search)
 
-maven 项目中使用如下 pom.xml 配置即可：
+maven 项目中，在pom.xml 中添加以下依赖：
 ```xml-dtd
 <dependency>
  <groupId>com.taosdata.jdbc</groupId>
@@ -119,32 +116,17 @@ maven 项目中使用如下 pom.xml 配置即可：
  <version>2.0.18</version>
 </dependency>
 ```
-**源码编译打包**
 
-下载 TDengine 源码之后，进入 taos-jdbcdriver 源码目录 `src/connector/jdbc` 执行 `mvn clean package -Dmaven.test.skip=true` 即可生成相应 jar 包。
+### 通过源码编译获取JDBC driver
 
-### 示例程序
-
-示例程序源码位于install_directory/examples/JDBC，有如下目录：
-
-JDBCDemo                JDBC示例源程序
-
-JDBCConnectorChecker    JDBC安装校验源程序及jar包
-
-Springbootdemo          springboot示例源程序
-
-SpringJdbcTemplate      SpringJDBC模板
-
-### 安装验证
-
-运行如下指令：
-
-```Bash
-cd {install_directory}/examples/JDBC/JDBCConnectorChecker
-java -jar JDBCConnectorChecker.jar -host <fqdn>
+可以通过下载TDengine的源码，自己编译最新版本的java connector
+```shell
+git clone https://github.com/taosdata/TDengine.git
+cd TDengine/src/connector/jdbc
+mvn clean package -Dmaven.test.skip=true
 ```
 
-验证通过将打印出成功信息。
+编译后，在target目录下会产生taos-jdbcdriver-2.0.XX-dist.jar的jar包。
 
 ## Java连接器的使用
 
@@ -163,13 +145,11 @@ Connection conn = DriverManager.getConnection(jdbcUrl);
 以上示例，使用 **JDBC-RESTful** 的 driver，建立了到 hostname 为 taosdemo.com，端口为 6041，数据库名为 test 的连接。这个 URL 中指定用户名（user）为 root，密码（password）为 taosdata。
 
 使用 JDBC-RESTful 接口，不需要依赖本地函数库。与 JDBC-JNI 相比，仅需要：
-
 1. driverClass 指定为“com.taosdata.jdbc.rs.RestfulDriver”；
 2. jdbcUrl 以“jdbc:TAOS-RS://”开头；
 3. 使用 6041 作为连接端口。
 
 如果希望获得更好的写入和查询性能，Java 应用可以使用 **JDBC-JNI** 的driver，如下所示：
-
 ```java
 Class.forName("com.taosdata.jdbc.TSDBDriver");
 String jdbcUrl = "jdbc:TAOS://taosdemo.com:6030/test?user=root&password=taosdata";
@@ -194,6 +174,9 @@ url中的配置参数如下：
 * charset：客户端使用的字符集，默认值为系统字符集。
 * locale：客户端语言环境，默认值系统当前 locale。
 * timezone：客户端使用的时区，默认值为系统当前时区。
+* batchfetch: 仅在使用JDBC-JNI时生效。true：在执行查询时批量拉取结果集；false：逐行拉取结果集。默认值为：false。
+* timestampFormat: 仅在使用JDBC-RESTful时生效. 'TIMESTAMP'：结果集中timestamp类型的字段为一个long值; 'UTC'：结果集中timestamp类型的字段为一个UTC时间格式的字符串; 'STRING'：结果集中timestamp类型的字段为一个本地时间格式的字符串。默认值为'STRING'。
+* batchErrorIgnore：true：在执行Statement的executeBatch时，如果中间有一条sql执行失败，继续执行下面的sq了。false：不再执行失败sql后的任何语句。默认值为：false。
 
 #### 指定URL和Properties获取连接
 
@@ -222,6 +205,9 @@ properties 中的配置参数如下：
 * TSDBDriver.PROPERTY_KEY_CHARSET：客户端使用的字符集，默认值为系统字符集。
 * TSDBDriver.PROPERTY_KEY_LOCALE：客户端语言环境，默认值系统当前 locale。
 * TSDBDriver.PROPERTY_KEY_TIME_ZONE：客户端使用的时区，默认值为系统当前时区。
+* TSDBDriver.PROPERTY_KEY_BATCH_LOAD: 仅在使用JDBC-JNI时生效。true：在执行查询时批量拉取结果集；false：逐行拉取结果集。默认值为：false。
+* TSDBDriver.PROPERTY_KEY_TIMESTAMP_FORMAT: 仅在使用JDBC-RESTful时生效. 'TIMESTAMP'：结果集中timestamp类型的字段为一个long值; 'UTC'：结果集中timestamp类型的字段为一个UTC时间格式的字符串; 'STRING'：结果集中timestamp类型的字段为一个本地时间格式的字符串。默认值为'STRING'。
+* TSDBDriver.PROPERTY_KEY_BATCH_ERROR_IGNORE：true：在执行Statement的executeBatch时，如果中间有一条sql执行失败，继续执行下面的sq了。false：不再执行失败sql后的任何语句。默认值为：false。
 
 #### 使用客户端配置文件建立连接
 
@@ -259,6 +245,7 @@ secondEp              cluster_node2:6030
 ```
 
 以上示例，jdbc 会使用客户端的配置文件，建立到 hostname 为 cluster_node1、端口为 6030、数据库名为 test 的连接。当集群中 firstEp 节点失效时，JDBC 会尝试使用 secondEp 连接集群。
+
 TDengine 中，只要保证 firstEp 和 secondEp 中一个节点有效，就可以正常建立到集群的连接。
 
 > 注意：这里的配置文件指的是调用 JDBC Connector 的应用程序所在机器上的配置文件，Linux OS 上默认值 /etc/taos/taos.cfg ，Windows OS 上默认值 C://TDengine/cfg/taos.cfg。
@@ -342,56 +329,245 @@ try (Statement statement = connection.createStatement()) {
 ```
 
 JDBC连接器可能报错的错误码包括3种：JDBC driver本身的报错（错误码在0x2301到0x2350之间），JNI方法的报错（错误码在0x2351到0x2400之间），TDengine其他功能模块的报错。
+
 具体的错误码请参考：
 * https://github.com/taosdata/TDengine/blob/develop/src/connector/jdbc/src/main/java/com/taosdata/jdbc/TSDBErrorNumbers.java
 * https://github.com/taosdata/TDengine/blob/develop/src/inc/taoserror.h
 
 ### <a class="anchor" id="stmt-java"></a>通过参数绑定写入数据
 
-从 2.1.2.0 版本开始，TDengine 的 **JDBC-JNI** 实现大幅改进了参数绑定方式对数据写入（INSERT）场景的支持。采用这种方式写入数据时，能避免 SQL 语法解析的资源消耗，从而在很多情况下显著提升写入性能。（注意：**JDBC-RESTful** 实现并不提供参数绑定这种使用方式。）
+从 2.1.2.0 版本开始，TDengine 的 JDBC-JNI 实现大幅改进了参数绑定方式对数据写入（INSERT）场景的支持。采用这种方式写入数据时，能避免 SQL 语法解析的资源消耗，从而在很多情况下显著提升写入性能。
+注意：
+* JDBC-RESTful 实现并不提供参数绑定这种使用方式
+* 以下示例代码基于taos-jdbcdriver-2.0.36
+* binary类型数据需要调用setString方法，nchar类型数据需要调用setNString方法
+* setString 和 setNString 都要求用户在 size 参数里声明表定义中对应列的列宽
 
+示例代码：
 ```java
-Statement stmt = conn.createStatement();
-Random r = new Random();
-
-// INSERT 语句中，VALUES 部分允许指定具体的数据列；如果采取自动建表，则 TAGS 部分需要设定全部 TAGS 列的参数值：
-TSDBPreparedStatement s = (TSDBPreparedStatement) conn.prepareStatement("insert into ? using weather_test tags (?, ?) (ts, c1, c2) values(?, ?, ?)");
-
-// 设定数据表名：
-s.setTableName("w1");
-// 设定 TAGS 取值：
-s.setTagInt(0, r.nextInt(10));
-s.setTagString(1, "Beijing");
-
-int numOfRows = 10;
-
-// VALUES 部分以逐列的方式进行设置：
-ArrayList<Long> ts = new ArrayList<>();
-for (int i = 0; i < numOfRows; i++){
-    ts.add(System.currentTimeMillis() + i);
+public class ParameterBindingDemo {
+ 
+    private static final String host = "127.0.0.1";
+    private static final Random random = new Random(System.currentTimeMillis());
+    private static final int BINARY_COLUMN_SIZE = 20;
+    private static final String[] schemaList = {
+            "create table stable1(ts timestamp, f1 tinyint, f2 smallint, f3 int, f4 bigint) tags(t1 tinyint, t2 smallint, t3 int, t4 bigint)",
+            "create table stable2(ts timestamp, f1 float, f2 double) tags(t1 float, t2 double)",
+            "create table stable3(ts timestamp, f1 bool) tags(t1 bool)",
+            "create table stable4(ts timestamp, f1 binary(" + BINARY_COLUMN_SIZE + ")) tags(t1 binary(" + BINARY_COLUMN_SIZE + "))",
+            "create table stable5(ts timestamp, f1 nchar(" + BINARY_COLUMN_SIZE + ")) tags(t1 nchar(" + BINARY_COLUMN_SIZE + "))"
+    };
+    private static final int numOfSubTable = 10, numOfRow = 10;
+ 
+    public static void main(String[] args) throws SQLException {
+ 
+        String jdbcUrl = "jdbc:TAOS://" + host + ":6030/";
+        Connection conn = DriverManager.getConnection(jdbcUrl, "root", "taosdata");
+ 
+        init(conn);
+ 
+        bindInteger(conn);
+ 
+        bindFloat(conn);
+ 
+        bindBoolean(conn);
+ 
+        bindBytes(conn);
+ 
+        bindString(conn);
+ 
+        conn.close();
+    }
+ 
+    private static void init(Connection conn) throws SQLException {
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("drop database if exists test_parabind");
+            stmt.execute("create database if not exists test_parabind");
+            stmt.execute("use test_parabind");
+            for (int i = 0; i < schemaList.length; i++) {
+                stmt.execute(schemaList[i]);
+            }
+        }
+    }
+ 
+    private static void bindInteger(Connection conn) throws SQLException {
+        String sql = "insert into ? using stable1 tags(?,?,?,?) values(?,?,?,?,?)";
+ 
+        try (TSDBPreparedStatement pstmt = conn.prepareStatement(sql).unwrap(TSDBPreparedStatement.class)) {
+ 
+            for (int i = 1; i <= numOfSubTable; i++) {
+                // set table name
+                pstmt.setTableName("t1_" + i);
+                // set tags
+                pstmt.setTagByte(0, Byte.parseByte(Integer.toString(random.nextInt(Byte.MAX_VALUE))));
+                pstmt.setTagShort(1, Short.parseShort(Integer.toString(random.nextInt(Short.MAX_VALUE))));
+                pstmt.setTagInt(2, random.nextInt(Integer.MAX_VALUE));
+                pstmt.setTagLong(3, random.nextLong());
+                // set columns
+                ArrayList<Long> tsList = new ArrayList<>();
+                long current = System.currentTimeMillis();
+                for (int j = 0; j < numOfRow; j++)
+                    tsList.add(current + j);
+                pstmt.setTimestamp(0, tsList);
+ 
+                ArrayList<Byte> f1List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++)
+                    f1List.add(Byte.parseByte(Integer.toString(random.nextInt(Byte.MAX_VALUE))));
+                pstmt.setByte(1, f1List);
+ 
+                ArrayList<Short> f2List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++)
+                    f2List.add(Short.parseShort(Integer.toString(random.nextInt(Short.MAX_VALUE))));
+                pstmt.setShort(2, f2List);
+ 
+                ArrayList<Integer> f3List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++)
+                    f3List.add(random.nextInt(Integer.MAX_VALUE));
+                pstmt.setInt(3, f3List);
+ 
+                ArrayList<Long> f4List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++)
+                    f4List.add(random.nextLong());
+                pstmt.setLong(4, f4List);
+ 
+                // add column
+                pstmt.columnDataAddBatch();
+            }
+            // execute column
+            pstmt.columnDataExecuteBatch();
+        }
+    }
+ 
+    private static void bindFloat(Connection conn) throws SQLException {
+        String sql = "insert into ? using stable2 tags(?,?) values(?,?,?)";
+ 
+        TSDBPreparedStatement pstmt = conn.prepareStatement(sql).unwrap(TSDBPreparedStatement.class);
+ 
+        for (int i = 1; i <= numOfSubTable; i++) {
+            // set table name
+            pstmt.setTableName("t2_" + i);
+            // set tags
+            pstmt.setTagFloat(0, random.nextFloat());
+            pstmt.setTagDouble(1, random.nextDouble());
+            // set columns
+            ArrayList<Long> tsList = new ArrayList<>();
+            long current = System.currentTimeMillis();
+            for (int j = 0; j < numOfRow; j++)
+                tsList.add(current + j);
+            pstmt.setTimestamp(0, tsList);
+ 
+            ArrayList<Float> f1List = new ArrayList<>();
+            for (int j = 0; j < numOfRow; j++)
+                f1List.add(random.nextFloat());
+            pstmt.setFloat(1, f1List);
+ 
+            ArrayList<Double> f2List = new ArrayList<>();
+            for (int j = 0; j < numOfRow; j++)
+                f2List.add(random.nextDouble());
+            pstmt.setDouble(2, f2List);
+ 
+            // add column
+            pstmt.columnDataAddBatch();
+        }
+        // execute
+        pstmt.columnDataExecuteBatch();
+        // close if no try-with-catch statement is used
+        pstmt.close();
+    }
+ 
+    private static void bindBoolean(Connection conn) throws SQLException {
+        String sql = "insert into ? using stable3 tags(?) values(?,?)";
+ 
+        try (TSDBPreparedStatement pstmt = conn.prepareStatement(sql).unwrap(TSDBPreparedStatement.class)) {
+            for (int i = 1; i <= numOfSubTable; i++) {
+                // set table name
+                pstmt.setTableName("t3_" + i);
+                // set tags
+                pstmt.setTagBoolean(0, random.nextBoolean());
+                // set columns
+                ArrayList<Long> tsList = new ArrayList<>();
+                long current = System.currentTimeMillis();
+                for (int j = 0; j < numOfRow; j++)
+                    tsList.add(current + j);
+                pstmt.setTimestamp(0, tsList);
+ 
+                ArrayList<Boolean> f1List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++)
+                    f1List.add(random.nextBoolean());
+                pstmt.setBoolean(1, f1List);
+ 
+                // add column
+                pstmt.columnDataAddBatch();
+            }
+            // execute
+            pstmt.columnDataExecuteBatch();
+        }
+    }
+ 
+    private static void bindBytes(Connection conn) throws SQLException {
+        String sql = "insert into ? using stable4 tags(?) values(?,?)";
+ 
+        try (TSDBPreparedStatement pstmt = conn.prepareStatement(sql).unwrap(TSDBPreparedStatement.class)) {
+ 
+            for (int i = 1; i <= numOfSubTable; i++) {
+                // set table name
+                pstmt.setTableName("t4_" + i);
+                // set tags
+                pstmt.setTagString(0, new String("abc"));
+ 
+                // set columns
+                ArrayList<Long> tsList = new ArrayList<>();
+                long current = System.currentTimeMillis();
+                for (int j = 0; j < numOfRow; j++)
+                    tsList.add(current + j);
+                pstmt.setTimestamp(0, tsList);
+ 
+                ArrayList<String> f1List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++) {
+                    f1List.add(new String("abc"));
+                }
+                pstmt.setString(1, f1List, BINARY_COLUMN_SIZE);
+ 
+                // add column
+                pstmt.columnDataAddBatch();
+            }
+            // execute
+            pstmt.columnDataExecuteBatch();
+        }
+    }
+ 
+    private static void bindString(Connection conn) throws SQLException {
+        String sql = "insert into ? using stable5 tags(?) values(?,?)";
+ 
+        try (TSDBPreparedStatement pstmt = conn.prepareStatement(sql).unwrap(TSDBPreparedStatement.class)) {
+ 
+            for (int i = 1; i <= numOfSubTable; i++) {
+                // set table name
+                pstmt.setTableName("t5_" + i);
+                // set tags
+                pstmt.setTagNString(0, "北京-abc");
+ 
+                // set columns
+                ArrayList<Long> tsList = new ArrayList<>();
+                long current = System.currentTimeMillis();
+                for (int j = 0; j < numOfRow; j++)
+                    tsList.add(current + j);
+                pstmt.setTimestamp(0, tsList);
+ 
+                ArrayList<String> f1List = new ArrayList<>();
+                for (int j = 0; j < numOfRow; j++) {
+                    f1List.add("北京-abc");
+                }
+                pstmt.setNString(1, f1List, BINARY_COLUMN_SIZE);
+ 
+                // add column
+                pstmt.columnDataAddBatch();
+            }
+            // execute
+            pstmt.columnDataExecuteBatch();
+        }
+    }
 }
-s.setTimestamp(0, ts);
-
-ArrayList<Integer> s1 = new ArrayList<>();
-for (int i = 0; i < numOfRows; i++){
-    s1.add(r.nextInt(100));
-}
-s.setInt(1, s1);
-
-ArrayList<String> s2 = new ArrayList<>();
-for (int i = 0; i < numOfRows; i++){
-    s2.add("test" + r.nextInt(100));
-}
-s.setString(2, s2, 10);
-
-// AddBatch 之后，缓存并未清空。为避免混乱，并不推荐在 ExecuteBatch 之前再次绑定新一批的数据：
-s.columnDataAddBatch();
-// 执行绑定数据后的语句：
-s.columnDataExecuteBatch();
-// 执行语句后清空缓存。在清空之后，可以复用当前的对象，绑定新的一批数据（可以是新表名、新 TAGS 值、新 VALUES 值）：
-s.columnDataClearBatch();
-// 执行完毕，释放资源：
-s.columnDataCloseBatch();
 ```
 
 用于设定 TAGS 取值的方法总共有：
@@ -422,11 +598,69 @@ public void setShort(int columnIndex, ArrayList<Short> list) throws SQLException
 public void setString(int columnIndex, ArrayList<String> list, int size) throws SQLException
 public void setNString(int columnIndex, ArrayList<String> list, int size) throws SQLException
 ```
-其中 setString 和 setNString 都要求用户在 size 参数里声明表定义中对应列的列宽。
 
-### <a class="anchor" id="subscribe"></a>订阅
+### <a class="anchor" id="set-client-configuration"></a>设置客户端参数
+从TDengine-2.3.5.0版本开始，jdbc driver支持在应用的第一次连接中，设置TDengine的客户端参数。Driver支持JDBC-JNI方式中，通过jdbcUrl和properties两种方式设置client parameter。
+注意：
+* JDBC-RESTful不支持设置client parameter的功能。
+* 应用中设置的client parameter为进程级别的，即如果要更新client的参数，需要重启应用。这是因为client parameter是全局参数，仅在应用程序的第一次设置生效。
+* 以下示例代码基于taos-jdbcdriver-2.0.36。
 
-#### 创建
+示例代码：
+```java
+public class ClientParameterSetting {
+    private static final String host = "127.0.0.1";
+ 
+    public static void main(String[] args) throws SQLException {
+        setParameterInJdbcUrl();
+ 
+        setParameterInProperties();
+    }
+ 
+    private static void setParameterInJdbcUrl() throws SQLException {
+        String jdbcUrl = "jdbc:TAOS://" + host + ":6030/?debugFlag=135&asyncLog=0";
+ 
+        Connection connection = DriverManager.getConnection(jdbcUrl, "root", "taosdata");
+ 
+        printDatabase(connection);
+ 
+        connection.close();
+    }
+ 
+    private static void setParameterInProperties() throws SQLException {
+        String jdbcUrl = "jdbc:TAOS://" + host + ":6030/";
+        Properties properties = new Properties();
+        properties.setProperty("user", "root");
+        properties.setProperty("password", "taosdata");
+        properties.setProperty("debugFlag", "135");
+        properties.setProperty("asyncLog", "0");
+        properties.setProperty("maxSQLLength", "1048576");
+ 
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, properties)) {
+            printDatabase(conn);
+        }
+    }
+ 
+    private static void printDatabase(Connection connection) throws SQLException {
+        try (Statement stmt = connection.createStatement()) {
+            ResultSet rs = stmt.executeQuery("show databases");
+ 
+            ResultSetMetaData meta = rs.getMetaData();
+            while (rs.next()) {
+                for (int i = 1; i <= meta.getColumnCount(); i++) {
+                    System.out.print(meta.getColumnLabel(i) + ": " + rs.getString(i) + "\t");
+                }
+                System.out.println();
+            }
+        }
+    }
+}
+```
+
+
+## <a class="anchor" id="subscribe"></a>订阅
+
+### 创建
 
 ```java
 TSDBSubscribe sub = ((TSDBConnection)conn).subscribe("topic", "select * from meters", false);
@@ -440,7 +674,7 @@ TSDBSubscribe sub = ((TSDBConnection)conn).subscribe("topic", "select * from met
 
 如上面的例子将使用 SQL 语句 `select * from meters` 创建一个名为 `topic` 的订阅，如果这个订阅已经存在，将继续之前的查询进度，而不是从头开始消费所有的数据。
 
-#### 消费数据
+### 消费数据
 
 ```java
 int total = 0;
@@ -458,7 +692,7 @@ while(true) {
 
 `consume` 方法返回一个结果集，其中包含从上次 `consume` 到目前为止的所有新数据。请务必按需选择合理的调用 `consume` 的频率（如例子中的 `Thread.sleep(1000)`），否则会给服务端造成不必要的压力。
 
-#### 关闭订阅
+### 关闭订阅
 
 ```java
 sub.close(true);
@@ -466,7 +700,7 @@ sub.close(true);
 
 `close` 方法关闭一个订阅。如果其参数为 `true` 表示保留订阅进度信息，后续可以创建同名订阅继续消费数据；如为 `false` 则不保留订阅进度。
 
-### 关闭资源
+## 关闭资源
 
 ```java
 resultSet.close();
@@ -478,19 +712,9 @@ conn.close();
 
 ## 与连接池使用
 
-**HikariCP**
+### HikariCP
 
-* 引入相应 HikariCP maven 依赖：
-
-```xml
-<dependency>
-    <groupId>com.zaxxer</groupId>
-    <artifactId>HikariCP</artifactId>
-    <version>3.4.1</version>
-</dependency>
-```
-
-* 使用示例如下：
+使用示例如下：
 
 ```java
  public static void main(String[] args) throws SQLException {
@@ -522,19 +746,9 @@ conn.close();
 > 通过 HikariDataSource.getConnection() 获取连接后，使用完成后需要调用 close() 方法，实际上它并不会关闭连接，只是放回连接池中。
 > 更多 HikariCP 使用问题请查看[官方说明](https://github.com/brettwooldridge/HikariCP)。
 
-**Druid**
+### Druid
 
-* 引入相应 Druid maven 依赖：
-
-```xml
-<dependency>
-    <groupId>com.alibaba</groupId>
-    <artifactId>druid</artifactId>
-    <version>1.1.20</version>
-</dependency>
-```
-
-* 使用示例如下：
+使用示例如下：
 
 ```java
 public static void main(String[] args) throws Exception {
@@ -580,18 +794,27 @@ Query OK, 1 row(s) in set (0.000141s)
 * Spring JdbcTemplate 中使用 taos-jdbcdriver，可参考 [SpringJdbcTemplate](https://github.com/taosdata/TDengine/tree/develop/tests/examples/JDBC/SpringJdbcTemplate)
 * Springboot + Mybatis 中使用，可参考 [springbootdemo](https://github.com/taosdata/TDengine/tree/develop/tests/examples/JDBC/springbootdemo)
 
+## 示例程序
+
+示例程序源码位于TDengine/test/examples/JDBC下:
+* JDBCDemo：JDBC示例源程序
+* JDBCConnectorChecker：JDBC安装校验源程序及jar包
+* Springbootdemo：springboot示例源程序
+* SpringJdbcTemplate：SpringJDBC模板
+
+请参考：[JDBC example](https://github.com/taosdata/TDengine/tree/develop/tests/examples/JDBC)
+
 ## 常见问题
-
+* 使用Statement的addBatch和executeBatch来执行“批量写入/更行”，为什么没有带来性能上的提升？
+  **原因**：TDengine的JDBC实现中，通过addBatch方法提交的sql语句，会按照添加的顺序，依次执行，这种方式没有减少与服务端的交互次数，不会带来性能上的提升。
+  **解决方法**：1. 在一条insert语句中拼接多个values值；2. 使用多线程的方式并发插入；3. 使用参数绑定的写入方式
+  
 * java.lang.UnsatisfiedLinkError: no taos in java.library.path
-
   **原因**：程序没有找到依赖的本地函数库 taos。
-
   **解决方法**：Windows 下可以将 C:\TDengine\driver\taos.dll 拷贝到 C:\Windows\System32\ 目录下，Linux 下将建立如下软链 `ln -s /usr/local/taos/driver/libtaos.so.x.x.x.x /usr/lib/libtaos.so` 即可。
 
 * java.lang.UnsatisfiedLinkError: taos.dll Can't load AMD 64 bit on a IA 32-bit platform
-
   **原因**：目前 TDengine 只支持 64 位 JDK。
-
   **解决方法**：重新安装 64 位 JDK。
 
 * 其它问题请参考 [Issues](https://github.com/taosdata/TDengine/issues)

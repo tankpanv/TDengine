@@ -85,6 +85,12 @@ int64_t dbgWSize = 0;
 char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/power";
 #elif (_TD_TQ_ == true)
 char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/tq";
+#elif (_TD_PRO_ == true)
+char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/ProDB";
+#elif (_TD_KH_ == true)
+char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/kinghistorian";
+#elif (_TD_JH_ == true)
+char    tsLogDir[TSDB_FILENAME_LEN] = "/var/log/jh_taos";
 #else
 char    tsLogDir[PATH_MAX] = "/var/log/taos";
 #endif
@@ -125,7 +131,7 @@ void taosCloseLog() {
   taosStopLog();
   //tsem_post(&(tsLogObj.logHandle->buffNotEmpty));
   taosMsleep(MAX_LOG_INTERVAL/1000);
-  if (taosCheckPthreadValid(tsLogObj.logHandle->asyncThread)) {
+  if (tsLogObj.logHandle && taosCheckPthreadValid(tsLogObj.logHandle->asyncThread)) {
     pthread_join(tsLogObj.logHandle->asyncThread, NULL);
   }
   // In case that other threads still use log resources causing invalid write in valgrind
@@ -564,7 +570,7 @@ static int32_t taosPushLogBuffer(SLogBuff *tLogBuff, char *msg, int32_t msgLen) 
   int32_t end = 0;
   int32_t remainSize = 0;
   static int64_t lostLine = 0;
-  char tmpBuf[40] = {0};
+  char tmpBuf[60] = {0};
   int32_t tmpBufLen = 0;
 
   if (tLogBuff == NULL || tLogBuff->stop) return -1;
