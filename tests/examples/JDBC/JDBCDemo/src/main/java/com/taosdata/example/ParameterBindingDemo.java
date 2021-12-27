@@ -8,10 +8,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ParameterBindingDemo {
 
-    private static final String host = "127.0.0.1";
+    //    private static final String host = "127.0.0.1";
+    private static final String host = "master";
     private static final Random random = new Random(System.currentTimeMillis());
     private static final int BINARY_COLUMN_SIZE = 20;
     private static final String[] schemaList = {
@@ -22,6 +24,7 @@ public class ParameterBindingDemo {
             "create table stable5(ts timestamp, f1 nchar(" + BINARY_COLUMN_SIZE + ")) tags(t1 nchar(" + BINARY_COLUMN_SIZE + "))"
     };
     private static final int numOfSubTable = 10, numOfRow = 10;
+    private static AtomicLong currentLong = new AtomicLong(System.currentTimeMillis());
 
     public static void main(String[] args) throws SQLException {
 
@@ -30,15 +33,18 @@ public class ParameterBindingDemo {
 
         init(conn);
 
-        bindInteger(conn);
+        for (int i = 0; i < 1000000; i++) {
+            bindInteger(conn);
+            System.out.println();
+        }
 
-        bindFloat(conn);
-
-        bindBoolean(conn);
-
-        bindBytes(conn);
-
-        bindString(conn);
+//        bindFloat(conn);
+//
+//        bindBoolean(conn);
+//
+//        bindBytes(conn);
+//
+//        bindString(conn);
 
         conn.close();
     }
@@ -69,7 +75,7 @@ public class ParameterBindingDemo {
                 pstmt.setTagLong(3, random.nextLong());
                 // set columns
                 ArrayList<Long> tsList = new ArrayList<>();
-                long current = System.currentTimeMillis();
+                long current = currentLong.getAndAdd(numOfRow);
                 for (int j = 0; j < numOfRow; j++)
                     tsList.add(current + j);
                 pstmt.setTimestamp(0, tsList);
