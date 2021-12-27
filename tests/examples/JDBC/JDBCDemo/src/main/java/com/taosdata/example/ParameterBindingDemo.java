@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ParameterBindingDemo {
@@ -36,6 +37,11 @@ public class ParameterBindingDemo {
         for (int i = 0; i < 1000000; i++) {
             bindInteger(conn);
             System.out.println();
+            try {
+                TimeUnit.SECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
 //        bindFloat(conn);
