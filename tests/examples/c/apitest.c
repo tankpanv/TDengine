@@ -432,7 +432,7 @@ int main(int argc, char* argv[]) {
 
   char* info = taos_get_server_info(taos);
   printf("server info: %s\n", info);
-  info = taos_get_client_info(taos);
+  info = taos_get_client_info();
   printf("client info: %s\n", info);
 
   printf("************  verify schema-less  *************\n");

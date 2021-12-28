@@ -177,7 +177,7 @@ int main(int argc, char *argv[]) {
       tInfo("failed to open data file, reason:%s", strerror(errno));
   }
 
-  qhandle = taosOpenQueue(sizeof(SRpcMsg));
+  qhandle = taosOpenQueue();
   qset = taosOpenQset();
   taosAddIntoQset(qset, qhandle, NULL);
 

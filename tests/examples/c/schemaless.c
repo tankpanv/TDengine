@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
 
   char* info = taos_get_server_info(taos);
   printf("server info: %s\n", info);
-  info = taos_get_client_info(taos);
+  info = taos_get_client_info();
   printf("client info: %s\n", info);
   result = taos_query(taos, "drop database if exists db;");
   taos_free_result(result);
