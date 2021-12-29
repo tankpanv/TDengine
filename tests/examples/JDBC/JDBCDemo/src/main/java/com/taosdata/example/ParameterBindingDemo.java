@@ -34,14 +34,14 @@ public class ParameterBindingDemo {
 
         init(conn);
 
-        for (int i = 0; i < 1000000; i++) {
+        for (int i = 0; i < 10000; i++) {
             bindInteger(conn);
             System.out.println(">>>" + i);
-            try {
-                TimeUnit.SECONDS.sleep(1);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+//            try {
+//                TimeUnit.SECONDS.sleep(1);
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            }
         }
 
 //        bindFloat(conn);
@@ -66,6 +66,12 @@ public class ParameterBindingDemo {
         }
     }
 
+    static ArrayList<Long> tsList = new ArrayList<>();
+    static ArrayList<Byte> f1List = new ArrayList<>();
+    static ArrayList<Short> f2List = new ArrayList<>();
+    static ArrayList<Integer> f3List = new ArrayList<>();
+    static ArrayList<Long> f4List = new ArrayList<>();
+
     private static void bindInteger(Connection conn) throws SQLException {
         String sql = "insert into ? using stable1 tags(?,?,?,?) values(?,?,?,?,?)";
 
@@ -80,34 +86,35 @@ public class ParameterBindingDemo {
                 pstmt.setTagInt(2, random.nextInt(Integer.MAX_VALUE));
                 pstmt.setTagLong(3, random.nextLong());
                 // set columns
-                ArrayList<Long> tsList = new ArrayList<>();
                 long current = currentLong.getAndAdd(numOfRow);
                 for (int j = 0; j < numOfRow; j++)
                     tsList.add(current + j);
                 pstmt.setTimestamp(0, tsList);
 
-                ArrayList<Byte> f1List = new ArrayList<>();
                 for (int j = 0; j < numOfRow; j++)
                     f1List.add(Byte.parseByte(Integer.toString(random.nextInt(Byte.MAX_VALUE))));
                 pstmt.setByte(1, f1List);
 
-                ArrayList<Short> f2List = new ArrayList<>();
                 for (int j = 0; j < numOfRow; j++)
                     f2List.add(Short.parseShort(Integer.toString(random.nextInt(Short.MAX_VALUE))));
                 pstmt.setShort(2, f2List);
 
-                ArrayList<Integer> f3List = new ArrayList<>();
                 for (int j = 0; j < numOfRow; j++)
                     f3List.add(random.nextInt(Integer.MAX_VALUE));
                 pstmt.setInt(3, f3List);
 
-                ArrayList<Long> f4List = new ArrayList<>();
                 for (int j = 0; j < numOfRow; j++)
                     f4List.add(random.nextLong());
                 pstmt.setLong(4, f4List);
 
                 // add column
                 pstmt.columnDataAddBatch();
+
+                tsList.clear();
+                f1List.clear();
+                f2List.clear();
+                f3List.clear();
+                f4List.clear();
             }
             // execute column
             pstmt.columnDataExecuteBatch();
