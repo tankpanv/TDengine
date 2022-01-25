@@ -186,9 +186,7 @@ if(${BUILD_WITH_TRAFT})
         IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/traft/.libs/libraft.a"
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/traft/include"
     )
-    # target_link_libraries(craft
-    #     INTERFACE pthread
-    # )
+    add_subdirectory(traft/demo_code)
 endif(${BUILD_WITH_TRAFT})
 
 # LIBUV
