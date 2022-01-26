@@ -111,7 +111,8 @@ static int vnodeOpenImpl(SVnode *pVnode) {
 
   // Open tsdb
   sprintf(dir, "%s/tsdb", pVnode->path);
-  pVnode->pTsdb = tsdbOpen(dir, pVnode->vgId, &(pVnode->config.tsdbCfg), vBufPoolGetMAF(pVnode), pVnode->pMeta, pVnode->pTfs);
+  pVnode->pTsdb =
+      tsdbOpen(dir, pVnode->vgId, &(pVnode->config.tsdbCfg), vBufPoolGetMAF(pVnode), pVnode->pMeta, pVnode->pTfs);
   if (pVnode->pTsdb == NULL) {
     // TODO: handle error
     return -1;
@@ -138,6 +139,19 @@ static int vnodeOpenImpl(SVnode *pVnode) {
     return -1;
   }
 
+  // Open sync
+  if (vndOpenSync(pVnode) < 0) {
+    return -1;
+  }
+  // struct raft_fsm vfsm = {
+  //     .version = 0,  // not used yet
+  //     .data = pVnode,
+  //     .apply = NULL,     // TODO
+  //     .snapshot = NULL,  // TODO
+  //     .restore = NULL    // TODO
+  // };
+  // addRaftVoter(NULL /*SRaftEnv *pRaftEnv */, NULL /*char peers[][ADDRESS_LEN]*/, 0 /*uint32_t peersCount*/,
+  //              pVnode->vgId /*uint16_t vid*/, NULL /*struct raft_fsm * pFsm*/);
   // TODO
   return 0;
 }

@@ -23,8 +23,8 @@
 #include "tlist.h"
 #include "tlockfree.h"
 #include "tmacro.h"
-#include "wal.h"
 #include "tq.h"
+#include "wal.h"
 
 #include "vnode.h"
 
@@ -36,6 +36,7 @@ extern "C" {
 
 typedef struct SVState   SVState;
 typedef struct SVBufPool SVBufPool;
+typedef struct SVSync    SVSync;
 
 typedef struct SVnodeTask {
   TD_DLIST_NODE(SVnodeTask);
@@ -81,6 +82,7 @@ struct SVnode {
   SQHandle*  pQuery;
   SDnode*    pDnode;
   STfs*      pTfs;
+  SVSync*    pSync;
 };
 
 int vnodeScheduleTask(SVnodeTask* task);
@@ -175,6 +177,11 @@ void*           vmaMalloc(SVMemAllocator* pVMA, uint64_t size);
 void            vmaFree(SVMemAllocator* pVMA, void* ptr);
 bool            vmaIsFull(SVMemAllocator* pVMA);
 
+// SVSync
+int vndInitSync(const char* host, uint16_t port, const char* baseDir);
+int vndClearSync();
+int vndOpenSync(SVnode* pVnode);
+int vndCloseSync(SVnode* pVnode);
 
 #ifdef __cplusplus
 }
