@@ -19,7 +19,7 @@ SVnodeMgr vnodeMgr = {.vnodeInitFlag = TD_MOD_UNINITIALIZED};
 
 static void* loop(void* arg);
 
-int vnodeInit(const SVnodeOpt *pOption) {
+int vnodeInit(const SVnodeOpt* pOption) {
   if (TD_CHECK_AND_SET_MODE_INIT(&(vnodeMgr.vnodeInitFlag)) == TD_MOD_INITIALIZED) {
     return 0;
   }
@@ -54,6 +54,8 @@ int vnodeInit(const SVnodeOpt *pOption) {
     return -1;
   }
 
+  vndInitSync("127.0.0.1", 6040, "/var/lib/taos/raft" /*TODO*/);
+
   return 0;
 }
 
@@ -75,6 +77,8 @@ void vnodeCleanup() {
   tfree(vnodeMgr.threads);
   pthread_cond_destroy(&(vnodeMgr.hasTask));
   pthread_mutex_destroy(&(vnodeMgr.mutex));
+
+  vndClearSync();
 }
 
 int vnodeScheduleTask(SVnodeTask* pTask) {
