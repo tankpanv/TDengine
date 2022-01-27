@@ -182,6 +182,7 @@ int vndInitSync(const char* host, uint16_t port, const char* baseDir);
 int vndClearSync();
 int vndOpenSync(SVnode* pVnode);
 int vndCloseSync(SVnode* pVnode);
+int vndSyncMsgs(SVnode* pVnode, SArray* pMsgs);
 
 #ifdef __cplusplus
 }

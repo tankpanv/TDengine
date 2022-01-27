@@ -24,6 +24,8 @@ struct SVSync {
 SRaftEnv raftEnv;
 
 static void* raftEnvLoop(void* param);
+static void  vndSyncApplyCb(struct raft_apply* req, int status, void* result);
+static int vndFSMApplyCb(struct raft_fsm *fsm, const struct raft_buffer *buf, void **result, raft_index index);
 
 // Sub-system level apis
 int vndInitSync(const char* host, uint16_t port, const char* baseDir) {
@@ -58,7 +60,7 @@ int vndOpenSync(SVnode* pVnode) {
 
   pVnode->pSync->fsm.version = 0;
   pVnode->pSync->fsm.data = pVnode;
-  pVnode->pSync->fsm.apply = NULL;     // todo
+  pVnode->pSync->fsm.apply = vndFSMApplyCb;     // todo
   pVnode->pSync->fsm.snapshot = NULL;  // todo
   pVnode->pSync->fsm.restore = NULL;   // todo
 
@@ -71,5 +73,42 @@ int vndCloseSync(SVnode* pVnode) {
   if (pVnode->pSync) {
     free(pVnode->pSync);
   }
+  return 0;
+}
+
+int vndSyncMsgs(SVnode* pVnode, SArray* pMsgs) {
+  struct raft_apply*  req;
+  int                 nMsg;
+  struct raft_buffer* buffers;
+
+  req = calloc(1, sizeof(*req));
+  req->data = pVnode;
+
+  nMsg = taosArrayGetSize(pMsgs);
+  buffers = calloc(nMsg, sizeof(*buffers));
+
+  for (int i = 0; i < nMsg; i++) {
+    SRpcMsg* pMsg = (SRpcMsg*)taosArrayGetP(pMsgs, i);
+
+    buffers[i].base = pMsg->pCont;
+    buffers[i].len = pMsg->contLen;
+  }
+
+  raft_apply(getRaft(&raftEnv, pVnode->vgId), req, buffers, nMsg, vndSyncApplyCb);
+
+  return 0;
+}
+
+static void vndSyncApplyCb(struct raft_apply* req, int status, void* result) {
+  if (status == 0) {
+    // return success
+  } else {
+    // return failure
+  }
+}
+
+static int vndFSMApplyCb(struct raft_fsm *fsm, const struct raft_buffer *buf, void **result, raft_index index) {
+  SVnode *pVnode = (SVnode *)fsm->data;
+  // TODO
   return 0;
 }
